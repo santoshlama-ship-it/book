@@ -99,17 +99,28 @@ export default function Home() {
   useEffect(() => { setZoom(1); setPan({ x: 0, y: 0 }); setDragging(false); }, [selected]);
   useEffect(() => { if (zoom === 1) setPan({ x: 0, y: 0 }); }, [zoom]);
   useEffect(() => {
-    const saved = localStorage.getItem('coverdesk-comments-production');
-    if (saved) setComments(JSON.parse(saved));
-  }, []);
-  useEffect(() => { localStorage.setItem('coverdesk-comments-production', JSON.stringify(comments)); }, [comments]);
-  useEffect(() => {
-    const stored = localStorage.getItem('coverdesk-designs-production');
-    if (stored) {
-      const parsed = JSON.parse(stored) as Cover[];
-      setDesigns(parsed);
-      if (parsed[0]) { setDraft(parsed[0]); setEditingIndex(0); }
-    }
+    const loadState = async () => {
+      const localDesigns = localStorage.getItem('coverdesk-designs-production');
+      const localComments = localStorage.getItem('coverdesk-comments-production');
+      try {
+        const response = await fetch('/api/state', { cache: 'no-store' });
+        if (!response.ok) throw new Error('Database unavailable');
+        const data = await response.json() as { designs?: Cover[]; comments?: Record<number, Comment[]> };
+        const nextDesigns = data.designs?.length ? data.designs : localDesigns ? JSON.parse(localDesigns) as Cover[] : [];
+        const nextComments = Object.keys(data.comments || {}).length ? data.comments! : localComments ? JSON.parse(localComments) as Record<number, Comment[]> : {};
+        setDesigns(nextDesigns);
+        setComments(nextComments);
+        if (nextDesigns[0]) { setDraft(nextDesigns[0]); setEditingIndex(0); }
+      } catch {
+        if (localDesigns) {
+          const parsed = JSON.parse(localDesigns) as Cover[];
+          setDesigns(parsed);
+          if (parsed[0]) { setDraft(parsed[0]); setEditingIndex(0); }
+        }
+        if (localComments) setComments(JSON.parse(localComments));
+      }
+    };
+    void loadState();
   }, []);
   const active = selected === null ? null : designs[selected];
   const move = (direction: number) => setSelected((current) => current === null ? 0 : (current + direction + designs.length) % designs.length);
@@ -135,20 +146,22 @@ export default function Home() {
   const selectDesign = (index: number) => { setEditingIndex(index); setDraft(designs[index]); setSaved(false); };
   const newDesign = () => { setEditingIndex(-1); setDraft(blankCover); setSaved(false); setMode('designer'); };
   const setDetail = (key: keyof NonNullable<Cover['details']>, value: string) => setDraft((current) => ({ ...current, details: { typography: '', illustration: '', consistency: '', specifications: '', delivered: '', usage: '', approval: '', ...current.details, [key]: value } }));
-  const saveDesign = () => {
-    setDesigns((current) => {
-      const next = editingIndex === -1 ? [...current, draft] : current.map((cover, index) => index === editingIndex ? draft : cover);
-      localStorage.setItem('coverdesk-designs-production', JSON.stringify(next));
-      if (editingIndex === -1) setEditingIndex(next.length - 1);
-      return next;
-    });
-    setSaved(true);
+  const saveDesign = async () => {
+    const next = editingIndex === -1 ? [...designs, draft] : designs.map((cover, index) => index === editingIndex ? draft : cover);
+    setDesigns(next);
+    localStorage.setItem('coverdesk-designs-production', JSON.stringify(next));
+    if (editingIndex === -1) setEditingIndex(next.length - 1);
+    const response = await fetch('/api/state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ designs: next }) });
+    setSaved(response.ok);
   };
   const submitComment = (event: FormEvent) => {
     event.preventDefault();
     if (selected === null || !commenterName.trim() || !commentText.trim()) return;
     const comment = { id: Date.now(), name: commenterName.trim(), text: commentText.trim(), time: 'Just now' };
-    setComments((current) => ({ ...current, [selected]: [...(current[selected] || []), comment] }));
+    const next = { ...comments, [selected]: [...(comments[selected] || []), comment] };
+    setComments(next);
+    localStorage.setItem('coverdesk-comments-production', JSON.stringify(next));
+    void fetch('/api/state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ comments: next }) });
     setCommentText('');
   };
 
