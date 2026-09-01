@@ -27,7 +27,7 @@ type Cover = {
   };
 };
 
-type Comment = { id: number; name: string; text: string; time: string };
+type Comment = { id: number; name: string; text: string; time: string; done?: boolean };
 
 const initialComments: Record<number, Comment[]> = {};
 const covers: Cover[] = [];
@@ -178,7 +178,7 @@ export default function Home() {
   const submitComment = (event: FormEvent) => {
     event.preventDefault();
     if (selected === null || !commenterName.trim() || !commentText.trim()) return;
-    const comment = { id: Date.now(), name: commenterName.trim(), text: commentText.trim(), time: 'Just now' };
+    const comment = { id: Date.now(), name: commenterName.trim(), text: commentText.trim(), time: 'Just now', done: false };
     const next = { ...comments, [selected]: [...(comments[selected] || []), comment] };
     setComments(next);
     localStorage.setItem('coverdesk-comments-production', JSON.stringify(next));
@@ -192,7 +192,21 @@ export default function Home() {
     localStorage.setItem('coverdesk-comments-production', JSON.stringify(next));
     await fetch('/api/state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ comments: next }) });
   };
-
+  const toggleCommentDone = async (commentId: number) => {
+    if (selected === null) return;
+    const next = { ...comments, [selected]: (comments[selected] || []).map((comment) => comment.id === commentId ? { ...comment, done: !comment.done } : comment) };
+    setComments(next);
+    localStorage.setItem('coverdesk-comments-production', JSON.stringify(next));
+    await fetch('/api/state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ comments: next }) });
+  };
+  const renderCoverCard = (cover: Cover) => {
+    const index = designs.indexOf(cover);
+    const commentCount = (comments[index] || []).filter((comment) => !comment.done).length;
+    return <button key={`${cover.grade}-${cover.subject}`} onClick={() => setSelected(index)} className="group overflow-hidden rounded-[24px] border border-white/80 bg-white/70 text-left shadow-[0_12px_35px_rgba(30,34,24,.08),inset_0_1px_0_rgba(255,255,255,.9)] backdrop-blur-xl transition duration-300 hover:-translate-y-1.5 hover:shadow-[0_22px_50px_rgba(30,34,24,.14)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#d5ff3d]">
+      <div className="aspect-[3/4] overflow-hidden bg-[#e8e8e3] p-3"><CoverImage link={cover.image} alt={`${cover.grade} ${cover.subject} book cover`} className="h-full w-full object-contain transition duration-500 group-hover:scale-[1.015]" /></div>
+      <div className="p-4"><div className="mb-2 flex items-center justify-between gap-2"><span className="text-xs font-medium text-black/45">{cover.grade}</span><Badge className={statusClass[cover.status]}>{cover.status}</Badge></div><h3 className="text-lg font-semibold tracking-tight">{cover.subject}</h3><div className="mt-3 flex items-center justify-between border-t border-black/7 pt-3 text-xs text-black/45"><span>{cover.version}</span><span className="flex items-center gap-1.5"><span className={`flex items-center gap-1 rounded-full px-2 py-1 font-semibold text-white transition ${commentCount > 0 ? 'bg-red-500 shadow-[0_0_0_3px_rgba(239,68,68,.14),0_5px_14px_rgba(239,68,68,.25)]' : 'bg-[#1b2a21]'}`} aria-label={`${commentCount} comment notification${commentCount === 1 ? '' : 's'}`}><MessageCircle className="size-3" />{commentCount}</span><span className="hidden font-medium text-[#42604d] 2xl:inline">View <ChevronRight className="inline size-3.5" /></span></span></div></div>
+    </button>;
+  };
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_12%_0%,#f1ffac_0,transparent_25%),radial-gradient(circle_at_92%_18%,#fff2a8_0,transparent_24%),linear-gradient(145deg,#fbfaf5,#f2f1e9)] text-[#171914]">
       <header className="sticky top-0 z-30 border-b border-white/60 bg-white/55 shadow-[0_8px_30px_rgba(35,38,28,.05)] backdrop-blur-2xl">
@@ -232,13 +246,13 @@ export default function Home() {
               <div className="flex items-start gap-4"><span className="grid size-11 shrink-0 place-items-center rounded-2xl text-[#26372c]" style={{ backgroundColor: group.accent }}><Layers3 className="size-5" /></span><div><div className="flex flex-wrap items-center gap-2"><h2 className="text-xl font-semibold tracking-tight">{group.name}</h2><Badge variant="outline" className="bg-white">{group.grades}</Badge></div><p className="mt-1 max-w-2xl text-sm leading-5 text-black/50">{group.description}</p></div></div>
               <p className="shrink-0 text-xs font-medium text-black/40">{group.items.length} cover{group.items.length === 1 ? '' : 's'} shown</p>
             </div>
-            {group.items.length > 0 ? <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {group.items.map((cover) => {
-                const index = designs.indexOf(cover);
-                return <button key={`${cover.grade}-${cover.subject}`} onClick={() => setSelected(index)} className="group overflow-hidden rounded-[24px] border border-white/80 bg-white/70 text-left shadow-[0_12px_35px_rgba(30,34,24,.08),inset_0_1px_0_rgba(255,255,255,.9)] backdrop-blur-xl transition duration-300 hover:-translate-y-1.5 hover:shadow-[0_22px_50px_rgba(30,34,24,.14)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#d5ff3d]">
-                  <div className="aspect-[3/4] overflow-hidden bg-[#e8e8e3] p-3"><CoverImage link={cover.image} alt={`${cover.grade} ${cover.subject} book cover`} className="h-full w-full object-contain transition duration-500 group-hover:scale-[1.015]" /></div>
-                  <div className="p-4"><div className="mb-2 flex items-center justify-between gap-2"><span className="text-xs font-medium text-black/45">{cover.grade}</span><Badge className={statusClass[cover.status]}>{cover.status}</Badge></div><h3 className="text-lg font-semibold tracking-tight">{cover.subject}</h3><div className="mt-3 flex items-center justify-between border-t border-black/7 pt-3 text-xs text-black/45"><span>{cover.version}</span><span className="flex items-center gap-1.5"><span className="flex items-center gap-1 rounded-full bg-[#1b2a21] px-2 py-1 font-semibold text-white"><MessageCircle className="size-3" />{comments[index]?.length || 0}</span><span className="hidden font-medium text-[#42604d] 2xl:inline">View <ChevronRight className="inline size-3.5" /></span></span></div></div>
-                </button>;
+            {group.items.length > 0 ? <div className="space-y-9">
+              {[...new Set(group.items.map((cover) => cover.subject.trim() || 'Untitled subject'))].sort((a, b) => a.localeCompare(b)).map((subject) => {
+                const subjectCovers = group.items.filter((cover) => (cover.subject.trim() || 'Untitled subject') === subject);
+                return <section key={subject} className="rounded-[24px] border border-black/7 bg-white/42 p-4 md:p-5">
+                  <div className="mb-5 flex items-center justify-between border-b border-black/7 pb-4"><div><p className="text-[10px] font-semibold uppercase tracking-[.16em] text-[#718278]">Subject</p><h3 className="mt-1 text-xl font-semibold tracking-tight">{subject}</h3></div><Badge variant="outline" className="bg-white/80">{subjectCovers.length} grade{subjectCovers.length === 1 ? '' : 's'}</Badge></div>
+                  <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{subjectCovers.map(renderCoverCard)}</div>
+                </section>;
               })}
             </div> : <div className="rounded-2xl border border-dashed border-black/10 bg-white/60 px-5 py-10 text-center text-sm text-black/40">{query ? 'No covers in this group match your search.' : 'No covers added yet.'}</div>}
           </section>)}
@@ -275,7 +289,7 @@ export default function Home() {
               <div className="mt-9 rounded-2xl bg-[#eef3e9] p-5"><p className="text-xs font-semibold uppercase tracking-[.14em] text-[#5f7466]">Approval</p><p className="mt-2 text-sm font-medium">Designer: __________________</p><p className="mt-2 text-sm font-medium">Client: ____________________</p><p className="mt-2 text-sm text-black/50">Date: ______________________</p></div>
               <section className="mt-9 border-t border-black/8 pt-8">
                 <div className="flex items-center justify-between"><div><p className="text-xs font-semibold uppercase tracking-[.14em] text-[#66796d]">Discussion</p><h3 className="mt-1 text-lg font-semibold">Comments</h3></div><span className="grid size-9 place-items-center rounded-full bg-[#1b2a21] text-sm font-semibold text-white">{selected !== null ? (comments[selected]?.length || 0) : 0}</span></div>
-                <div className="mt-5 space-y-4">{(selected !== null ? (comments[selected] || []) : []).map((comment: Comment) => <article key={comment.id} className="group rounded-2xl border border-black/7 bg-white p-4"><div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><span className="grid size-7 place-items-center rounded-full bg-[#dce9cf] text-xs font-bold text-[#334d3c]">{comment.name.charAt(0).toUpperCase()}</span><p className="text-sm font-semibold">{comment.name}</p></div><div className="flex items-center gap-1"><time className="text-[10px] text-black/35">{comment.time}</time><Button onClick={() => void deleteComment(comment.id)} variant="ghost" size="icon-sm" className="text-black/30 hover:bg-red-50 hover:text-red-600 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100" aria-label={`Delete comment by ${comment.name}`}><Trash2 /></Button></div></div><p className="mt-3 text-sm leading-5 text-black/60">{comment.text}</p></article>)}</div>
+                <div className="mt-5 space-y-4">{(selected !== null ? (comments[selected] || []) : []).map((comment: Comment) => <article key={comment.id} className={`group rounded-2xl border p-4 transition ${comment.done ? 'border-emerald-200 bg-emerald-50/70' : 'border-black/7 bg-white'}`}><div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><span className={`grid size-7 place-items-center rounded-full text-xs font-bold ${comment.done ? 'bg-emerald-500 text-white' : 'bg-[#dce9cf] text-[#334d3c]'}`}>{comment.done ? <Check className="size-4" /> : comment.name.charAt(0).toUpperCase()}</span><p className="text-sm font-semibold">{comment.name}</p></div><div className="flex items-center gap-1"><time className="text-[10px] text-black/35">{comment.time}</time><Button onClick={() => void deleteComment(comment.id)} variant="ghost" size="icon-sm" className="text-black/30 hover:bg-red-50 hover:text-red-600 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100" aria-label={`Delete comment by ${comment.name}`}><Trash2 /></Button></div></div><p className={`mt-3 text-sm leading-5 ${comment.done ? 'text-black/45 line-through decoration-black/20' : 'text-black/60'}`}>{comment.text}</p><Button onClick={() => void toggleCommentDone(comment.id)} variant={comment.done ? 'outline' : 'default'} size="sm" className={`mt-4 ${comment.done ? 'border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}><Check />{comment.done ? 'Done · Reopen' : 'Mark done'}</Button></article>)}</div>
                 <form onSubmit={submitComment} className="mt-5 rounded-2xl border border-black/8 bg-white p-4">
                   <label htmlFor="comment-name" className="text-xs font-semibold text-black/65">Your name</label><Input id="comment-name" value={commenterName} onChange={(event) => setCommenterName(event.target.value)} className="mt-2" placeholder="Enter your name first" required />
                   <label htmlFor="comment-text" className="mt-4 block text-xs font-semibold text-black/65">Comment</label><Textarea id="comment-text" value={commentText} onChange={(event) => setCommentText(event.target.value)} disabled={!commenterName.trim()} className="mt-2 min-h-24 resize-none" placeholder={commenterName.trim() ? 'Write your feedback…' : 'Enter your name to enable comments'} required />
