@@ -13,19 +13,46 @@
   --color-accent: var(--accent); --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive); --color-border: var(--border);
   --color-input: var(--input); --color-ring: var(--ring);
-  --font-sans: var(--font-geist-sans); --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-nunito); --font-mono: var(--font-geist-mono);
   --radius-sm: calc(var(--radius) * .6); --radius-md: calc(var(--radius) * .8);
   --radius-lg: var(--radius); --radius-xl: calc(var(--radius) * 1.4); --radius-2xl: calc(var(--radius) * 1.8);
 }
 :root {
-  --background: #f6f7f4; --foreground: #18211b; --card: #fff; --card-foreground: #18211b;
-  --popover: #fff; --popover-foreground: #18211b; --primary: #17271f; --primary-foreground: #fff;
-  --secondary: #eef1ec; --secondary-foreground: #26342b; --muted: #eef1ec; --muted-foreground: #6e7971;
-  --accent: #edf4e3; --accent-foreground: #294234; --destructive: #c94c4c;
-  --border: #dfe4dd; --input: #dfe4dd; --ring: #6d8b78; --radius: .7rem;
+  --background: #f8f7f2; --foreground: #171914; --card: rgb(255 255 255 / 74%); --card-foreground: #171914;
+  --popover: #fffffc; --popover-foreground: #171914; --primary: #171914; --primary-foreground: #efffa6;
+  --secondary: #fff7bd; --secondary-foreground: #292b1d; --muted: #f0efe8; --muted-foreground: #73766d;
+  --accent: #dfff55; --accent-foreground: #171914; --destructive: #c94c4c;
+  --border: rgb(23 25 20 / 10%); --input: rgb(23 25 20 / 13%); --ring: #c9f529; --radius: .9rem;
 }
 * { border-color: var(--border); }
-html { font-family: var(--font-geist-sans), Arial, sans-serif; }
+html { font-family: var(--font-nunito), Arial, sans-serif; }
 body { margin: 0; background: var(--background); color: var(--foreground); }
 button { cursor: pointer; }
-::selection { background: #d7ef83; color: #17271f; }
+::selection { background: #dfff55; color: #171914; }
+
+.glass-surface {
+  background: linear-gradient(145deg, rgb(255 255 255 / 82%), rgb(255 255 255 / 54%));
+  border: 1px solid rgb(255 255 255 / 72%);
+  box-shadow: 0 18px 55px rgb(31 34 24 / 9%), inset 0 1px 0 rgb(255 255 255 / 80%);
+  backdrop-filter: blur(22px) saturate(150%);
+}
+
+.neon-glow { box-shadow: 0 0 0 1px rgb(223 255 85 / 35%), 0 10px 28px rgb(191 238 31 / 20%); }
+
+main aside,
+main section.rounded-2xl,
+main section.rounded-\[28px\] {
+  backdrop-filter: blur(22px) saturate(145%);
+  box-shadow: 0 18px 50px rgb(31 34 24 / 8%), inset 0 1px 0 rgb(255 255 255 / 70%);
+}
+
+main input,
+main textarea,
+main select {
+  background-color: rgb(255 255 255 / 72%) !important;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 85%);
+}
+
+main input:focus,
+main textarea:focus,
+main select:focus { border-color: #c9f529; }
