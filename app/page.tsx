@@ -85,6 +85,7 @@ export default function Home() {
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const dragStart = useRef({ pointerX: 0, pointerY: 0, panX: 0, panY: 0 });
+  const documentationForm = useRef<HTMLElement>(null);
   const visible = useMemo(() => designs.filter((cover) => `${cover.grade} ${cover.subject}`.toLowerCase().includes(query.toLowerCase())), [designs, query]);
   const galleryGroups = [
     { name: 'Foundation Series', grades: 'Grades 1–3', description: 'A shared playful visual system with friendly characters, bright colours and simple learning cues.', accent: '#d8ef83', items: visible.filter((cover) => Number(cover.grade.replace('Grade ', '')) <= 3) },
@@ -144,7 +145,13 @@ export default function Home() {
     setDragging(false);
   };
   const selectDesign = (index: number) => { setEditingIndex(index); setDraft(designs[index]); setSaved(false); };
-  const newDesign = () => { setEditingIndex(-1); setDraft(blankCover); setSaved(false); setMode('designer'); };
+  const newDesign = () => {
+    setEditingIndex(-1);
+    setDraft(blankCover);
+    setSaved(false);
+    setMode('designer');
+    requestAnimationFrame(() => documentationForm.current?.scrollTo({ top: 0, behavior: 'smooth' }));
+  };
   const setDetail = (key: keyof NonNullable<Cover['details']>, value: string) => setDraft((current) => ({ ...current, details: { typography: '', illustration: '', consistency: '', specifications: '', delivered: '', usage: '', approval: '', ...current.details, [key]: value } }));
   const saveDesign = async () => {
     const next = editingIndex === -1 ? [...designs, draft] : designs.map((cover, index) => index === editingIndex ? draft : cover);
@@ -203,7 +210,7 @@ export default function Home() {
     const index = designs.indexOf(cover);
     const commentCount = (comments[index] || []).filter((comment) => !comment.done).length;
     return <button key={`${cover.grade}-${cover.subject}`} onClick={() => setSelected(index)} className="group overflow-hidden rounded-[24px] border border-white/80 bg-white/70 text-left shadow-[0_12px_35px_rgba(30,34,24,.08),inset_0_1px_0_rgba(255,255,255,.9)] backdrop-blur-xl transition duration-300 hover:-translate-y-1.5 hover:shadow-[0_22px_50px_rgba(30,34,24,.14)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#d5ff3d]">
-      <div className="aspect-[3/4] overflow-hidden bg-[#e8e8e3] p-3"><CoverImage link={cover.image} alt={`${cover.grade} ${cover.subject} book cover`} className="h-full w-full object-contain transition duration-500 group-hover:scale-[1.015]" /></div>
+      <div className="aspect-video overflow-hidden bg-[#e8e8e3]"><CoverImage link={cover.image} alt={`${cover.grade} ${cover.subject} book cover`} className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.015]" /></div>
       <div className="p-4"><div className="mb-2 flex items-center justify-between gap-2"><span className="text-xs font-medium text-black/45">{cover.grade}</span><Badge className={statusClass[cover.status]}>{cover.status}</Badge></div><h3 className="text-lg font-semibold tracking-tight">{cover.subject}</h3><div className="mt-3 flex items-center justify-between border-t border-black/7 pt-3 text-xs text-black/45"><span>{cover.version}</span><span className="flex items-center gap-1.5"><span className={`flex items-center gap-1 rounded-full px-2 py-1 font-semibold text-white transition ${commentCount > 0 ? 'bg-red-500 shadow-[0_0_0_3px_rgba(239,68,68,.14),0_5px_14px_rgba(239,68,68,.25)]' : 'bg-[#1b2a21]'}`} aria-label={`${commentCount} comment notification${commentCount === 1 ? '' : 's'}`}><MessageCircle className="size-3" />{commentCount}</span><span className="hidden font-medium text-[#42604d] 2xl:inline">View <ChevronRight className="inline size-3.5" /></span></span></div></div>
     </button>;
   };
@@ -223,7 +230,7 @@ export default function Home() {
 
           <section className="rounded-2xl border border-black/8 bg-[#202821] p-5 xl:sticky xl:top-24 xl:flex xl:h-[calc(100vh-120px)] xl:flex-col"><div className="mb-4 flex items-center justify-between text-white"><div><p className="text-xs text-white/45">Live cover preview</p><p className="mt-1 font-semibold">{draft.grade || 'New cover'}{draft.subject ? ` · ${draft.subject}` : ''}</p></div><Palette className="size-5 text-[#d8ef83]" /></div><div className="flex min-h-[400px] flex-1 items-center justify-center overflow-hidden rounded-xl bg-black/20 p-4">{draft.image ? <CoverImage link={draft.image} alt="Cover preview" className="max-h-full max-w-full rounded-md object-contain shadow-2xl" /> : <div className="text-center text-white/35"><Link2 className="mx-auto mb-3 size-8" /><p className="text-sm">Paste a Google Drive image link</p></div>}</div><div className="mt-4 flex items-start gap-2 rounded-xl border border-white/10 bg-white/5 p-3 text-xs leading-5 text-white/55"><Link2 className="mt-0.5 size-4 shrink-0" />Use a direct JPG/PNG file link—not a folder link—and set access to “Anyone with the link.”</div></section>
 
-          <section className="rounded-2xl border border-black/8 bg-white p-5 md:p-7 xl:h-[calc(100vh-120px)] xl:overflow-y-auto">
+          <section ref={documentationForm} className="rounded-2xl border border-black/8 bg-white p-5 md:p-7 xl:h-[calc(100vh-120px)] xl:overflow-y-auto">
             <div className="grid gap-4 sm:grid-cols-2"><div><label className="text-xs font-semibold text-black/60">Grade</label><Input value={draft.grade} onChange={(event) => { setSaved(false); setDraft({ ...draft, grade: event.target.value }); }} className="mt-2" /></div><div><label className="text-xs font-semibold text-black/60">Subject</label><Input value={draft.subject} onChange={(event) => { setSaved(false); setDraft({ ...draft, subject: event.target.value }); }} className="mt-2" /></div><div><label className="text-xs font-semibold text-black/60">Version</label><Input value={draft.version} onChange={(event) => { setSaved(false); setDraft({ ...draft, version: event.target.value }); }} className="mt-2" /></div><div><label className="text-xs font-semibold text-black/60">Status</label><select value={draft.status} onChange={(event) => { setSaved(false); setDraft({ ...draft, status: event.target.value }); }} className="mt-2 h-8 w-full rounded-lg border bg-white px-2.5 text-sm">{Object.keys(statusClass).map((status) => <option key={status}>{status}</option>)}</select></div></div>
             <div className="mt-5"><label className="text-xs font-semibold text-black/60">Google Drive image link</label><Input value={draft.image} onChange={(event) => { setSaved(false); setDraft({ ...draft, image: event.target.value }); }} className="mt-2" placeholder="https://drive.google.com/file/d/.../view" /><p className="mt-2 text-xs leading-5 text-black/40">Paste the sharing link for a JPG or PNG stored in Google Drive. Coverdesk stores only this link.</p></div>
             <div className="mt-7 border-t border-black/8 pt-6"><h2 className="font-semibold">Design concept</h2><label className="mt-4 block text-xs font-semibold text-black/60">Main concept</label><Textarea value={draft.concept} onChange={(event) => { setSaved(false); setDraft({ ...draft, concept: event.target.value }); }} className="mt-2 min-h-24" /><label className="mt-4 block text-xs font-semibold text-black/60">Theme and inspiration</label><Textarea value={draft.inspiration} onChange={(event) => { setSaved(false); setDraft({ ...draft, inspiration: event.target.value }); }} className="mt-2 min-h-20" /></div>
@@ -250,7 +257,7 @@ export default function Home() {
               {[...new Set(group.items.map((cover) => cover.subject.trim() || 'Untitled subject'))].sort((a, b) => a.localeCompare(b)).map((subject) => {
                 const subjectCovers = group.items.filter((cover) => (cover.subject.trim() || 'Untitled subject') === subject);
                 return <section key={subject} className="rounded-[24px] border border-black/7 bg-white/42 p-4 md:p-5">
-                  <div className="mb-5 flex items-center justify-between border-b border-black/7 pb-4"><div><p className="text-[10px] font-semibold uppercase tracking-[.16em] text-[#718278]">Subject</p><h3 className="mt-1 text-xl font-semibold tracking-tight">{subject}</h3></div><Badge variant="outline" className="bg-white/80">{subjectCovers.length} grade{subjectCovers.length === 1 ? '' : 's'}</Badge></div>
+                  <div className="mb-5 border-b border-black/7 pb-4"><p className="text-[10px] font-semibold uppercase tracking-[.16em] text-[#718278]">Subject</p><h3 className="mt-1 text-xl font-semibold tracking-tight">{subject}</h3></div>
                   <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{subjectCovers.map(renderCoverCard)}</div>
                 </section>;
               })}
