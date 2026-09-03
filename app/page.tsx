@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 
 type Cover = {
+  id?: string;
   grade: string;
   subject: string;
   status: string;
@@ -176,8 +177,10 @@ export default function Home() {
   const setDetail = (key: keyof NonNullable<Cover['details']>, value: string) => setDraft((current) => ({ ...current, details: { typography: '', illustration: '', consistency: '', specifications: '', delivered: '', usage: '', approval: '', ...current.details, [key]: value } }));
   const saveDesign = async () => {
     if (!canSave) return;
-    const next = editingIndex === -1 ? [...designs, draft] : designs.map((cover, index) => index === editingIndex ? draft : cover);
+    const savedDraft = { ...draft, id: draft.id || crypto.randomUUID() };
+    const next = editingIndex === -1 ? [...designs, savedDraft] : designs.map((cover, index) => index === editingIndex ? savedDraft : cover);
     setDesigns(next);
+    setDraft(savedDraft);
     localStorage.setItem('coverdesk-designs-production', JSON.stringify(next));
     if (editingIndex === -1) setEditingIndex(next.length - 1);
     const response = await fetch('/api/state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ designs: next }) });
@@ -247,6 +250,21 @@ export default function Home() {
     const response = await fetch('/api/state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ designs: nextDesigns }) });
     setApprovalSaving(false);
     setApprovalSaved(response.ok);
+  };
+  const removeApproval = async () => {
+    if (selected === null || !window.confirm('Remove this approval and return the cover to Client review?')) return;
+    setApprovalSaving(true);
+    setApprovalSaved(false);
+    const nextDesigns = designs.map((cover, index) => {
+      if (index !== selected) return cover;
+      const { approval: _approval, ...coverWithoutApproval } = cover;
+      return { ...coverWithoutApproval, status: 'Client review' };
+    });
+    setDesigns(nextDesigns);
+    setApprovalDraft({ designer: '', client: '', date: '' });
+    localStorage.setItem('coverdesk-designs-production', JSON.stringify(nextDesigns));
+    await fetch('/api/state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ designs: nextDesigns }) });
+    setApprovalSaving(false);
   };
   const renderCoverCard = (cover: Cover) => {
     const index = designs.indexOf(cover);
@@ -342,6 +360,7 @@ export default function Home() {
                 <label className="mt-4 block text-xs font-semibold text-black/60" htmlFor="approval-date">Approval date</label>
                 <Input id="approval-date" type="date" value={approvalDraft.date} onChange={(event) => { setApprovalSaved(false); setApprovalDraft({ ...approvalDraft, date: event.target.value }); }} className="mt-2 bg-white/85" required />
                 <Button type="submit" disabled={approvalSaving || !approvalDraft.client.trim() || !approvalDraft.date} className="mt-4 w-full bg-emerald-700 text-white hover:bg-emerald-800"><Check />{approvalSaving ? 'Saving approval…' : active.approval ? 'Update approval' : 'Approve cover'}</Button>
+                {active.approval && <Button type="button" onClick={removeApproval} disabled={approvalSaving} variant="ghost" className="mt-2 w-full text-red-600 hover:bg-red-50 hover:text-red-700"><Trash2 />Remove approval</Button>}
                 {approvalSaved && <p className="mt-3 flex items-center justify-center gap-1.5 text-xs font-semibold text-emerald-700"><Check className="size-4" />Approval saved and cover status updated.</p>}
               </form>
               <section className="mt-9 border-t border-black/8 pt-8">
