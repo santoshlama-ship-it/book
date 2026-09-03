@@ -1,7 +1,7 @@
 'use client';
 
 import { type FormEvent, type PointerEvent as ReactPointerEvent, type WheelEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronLeft, ChevronRight, Eye, FileText, Layers3, Link2, MessageCircle, Palette, Pencil, Plus, RotateCcw, Save, Search, Send, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { AlertCircle, Check, ChevronLeft, ChevronRight, Eye, FileText, Layers3, Link2, MessageCircle, Palette, Pencil, Plus, RotateCcw, Save, Search, Send, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,6 +16,11 @@ type Cover = {
   palette: { name: string; hex: string }[];
   concept: string;
   inspiration: string;
+  approval?: {
+    designer: string;
+    client: string;
+    date: string;
+  };
   details?: {
     typography: string;
     illustration: string;
@@ -63,11 +68,14 @@ function displayImageUrl(link: string) {
   return id ? `https://lh3.googleusercontent.com/d/${id}=w2000` : link;
 }
 
-function CoverImage({ link, alt, className }: { link: string; alt: string; className: string }) {
+function CoverImage({ link, alt, className, onStatusChange }: { link: string; alt: string; className: string; onStatusChange?: (status: 'loading' | 'loaded' | 'error') => void }) {
   const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [link]);
+  useEffect(() => {
+    setFailed(false);
+    if (link) onStatusChange?.('loading');
+  }, [link]);
   if (!link || failed) return <div className={`${className} grid place-items-center bg-black/5 p-4 text-center text-xs text-black/40`}><span><FileText className="mx-auto mb-2 size-5" />{failed ? 'Image unavailable. Check the Drive sharing permission and file link.' : 'No image link added'}</span></div>;
-  return <img src={displayImageUrl(link)} alt={alt} className={className} referrerPolicy="no-referrer" onError={() => setFailed(true)} />;
+  return <img src={displayImageUrl(link)} alt={alt} className={className} referrerPolicy="no-referrer" onLoad={() => onStatusChange?.('loaded')} onError={() => { setFailed(true); onStatusChange?.('error'); }} />;
 }
 
 export default function Home() {
@@ -78,14 +86,22 @@ export default function Home() {
   const [editingIndex, setEditingIndex] = useState(-1);
   const [draft, setDraft] = useState<Cover>(blankCover);
   const [saved, setSaved] = useState(false);
+  const [previewImageStatus, setPreviewImageStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
   const [comments, setComments] = useState<Record<number, Comment[]>>(initialComments);
   const [commenterName, setCommenterName] = useState('');
   const [commentText, setCommentText] = useState('');
+  const [approvalDraft, setApprovalDraft] = useState({ designer: '', client: '', date: '' });
+  const [approvalSaving, setApprovalSaving] = useState(false);
+  const [approvalSaved, setApprovalSaved] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const dragStart = useRef({ pointerX: 0, pointerY: 0, panX: 0, panY: 0 });
   const documentationForm = useRef<HTMLElement>(null);
+  const gradeIsValid = /^Grade [1-7]$/.test(draft.grade.trim());
+  const imageLinkIsValid = !draft.image.trim() || Boolean(driveFileId(draft.image)) || /^https?:\/\/\S+$/i.test(draft.image.trim());
+  const imageHasProblem = Boolean(draft.image.trim()) && (!imageLinkIsValid || previewImageStatus === 'error');
+  const canSave = gradeIsValid && Boolean(draft.subject.trim()) && !imageHasProblem;
   const visible = useMemo(() => designs.filter((cover) => `${cover.grade} ${cover.subject}`.toLowerCase().includes(query.toLowerCase())), [designs, query]);
   const galleryGroups = [
     { name: 'Foundation Series', grades: 'Grades 1–3', description: 'A shared playful visual system with friendly characters, bright colours and simple learning cues.', accent: '#d8ef83', items: visible.filter((cover) => Number(cover.grade.replace('Grade ', '')) <= 3) },
@@ -98,6 +114,11 @@ export default function Home() {
     return () => { window.removeEventListener('keydown', close); document.body.style.overflow = ''; };
   }, [selected]);
   useEffect(() => { setZoom(1); setPan({ x: 0, y: 0 }); setDragging(false); }, [selected]);
+  useEffect(() => {
+    if (selected === null) return;
+    setApprovalDraft(designs[selected]?.approval || { designer: '', client: '', date: '' });
+    setApprovalSaved(false);
+  }, [selected, designs]);
   useEffect(() => { if (zoom === 1) setPan({ x: 0, y: 0 }); }, [zoom]);
   useEffect(() => {
     const loadState = async () => {
@@ -154,6 +175,7 @@ export default function Home() {
   };
   const setDetail = (key: keyof NonNullable<Cover['details']>, value: string) => setDraft((current) => ({ ...current, details: { typography: '', illustration: '', consistency: '', specifications: '', delivered: '', usage: '', approval: '', ...current.details, [key]: value } }));
   const saveDesign = async () => {
+    if (!canSave) return;
     const next = editingIndex === -1 ? [...designs, draft] : designs.map((cover, index) => index === editingIndex ? draft : cover);
     setDesigns(next);
     localStorage.setItem('coverdesk-designs-production', JSON.stringify(next));
@@ -206,6 +228,26 @@ export default function Home() {
     localStorage.setItem('coverdesk-comments-production', JSON.stringify(next));
     await fetch('/api/state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ comments: next }) });
   };
+  const approveCover = async (event: FormEvent) => {
+    event.preventDefault();
+    if (selected === null || !approvalDraft.client.trim() || !approvalDraft.date) return;
+    setApprovalSaving(true);
+    setApprovalSaved(false);
+    const nextDesigns = designs.map((cover, index) => index === selected ? {
+      ...cover,
+      status: 'Approved',
+      approval: {
+        designer: active?.approval?.designer || '',
+        client: approvalDraft.client.trim(),
+        date: approvalDraft.date,
+      },
+    } : cover);
+    setDesigns(nextDesigns);
+    localStorage.setItem('coverdesk-designs-production', JSON.stringify(nextDesigns));
+    const response = await fetch('/api/state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ designs: nextDesigns }) });
+    setApprovalSaving(false);
+    setApprovalSaved(response.ok);
+  };
   const renderCoverCard = (cover: Cover) => {
     const index = designs.indexOf(cover);
     const commentCount = (comments[index] || []).filter((comment) => !comment.done).length;
@@ -224,19 +266,19 @@ export default function Home() {
       </header>
 
       {mode === 'designer' && <div className="mx-auto max-w-[1600px] px-5 py-8 md:px-9 md:py-10">
-        <div className="mb-7 flex flex-col gap-3 md:flex-row md:items-end md:justify-between"><div><p className="text-xs font-semibold uppercase tracking-[.18em] text-[#63766a]">Designer workspace</p><h1 className="mt-2 text-3xl font-semibold tracking-[-.04em] md:text-4xl">Build the cover documentation</h1><p className="mt-2 text-sm text-black/50">Create a cover, add the artwork and complete every description the client needs to review.</p></div><div className="flex items-center gap-3">{saved && <span className="flex items-center gap-1.5 text-sm font-medium text-emerald-700"><Check className="size-4" />Draft saved</span>}<Button variant="outline" onClick={newDesign}><Plus />New cover</Button><Button onClick={saveDesign} disabled={!draft.grade.trim() || !draft.subject.trim()}><Save />Save design</Button></div></div>
+        <div className="mb-7 flex flex-col gap-3 md:flex-row md:items-end md:justify-between"><div><p className="text-xs font-semibold uppercase tracking-[.18em] text-[#63766a]">Designer workspace</p><h1 className="mt-2 text-3xl font-semibold tracking-[-.04em] md:text-4xl">Build the cover documentation</h1><p className="mt-2 text-sm text-black/50">Create a cover, add the artwork and complete every description the client needs to review.</p></div><div className="flex items-center gap-3">{saved && <span className="flex items-center gap-1.5 text-sm font-medium text-emerald-700"><Check className="size-4" />Draft saved</span>}<Button variant="outline" onClick={newDesign}><Plus />New cover</Button><Button onClick={saveDesign} disabled={!canSave}><Save />Save design</Button></div></div>
         <div className="grid gap-5 xl:grid-cols-[230px_minmax(280px,.8fr)_minmax(380px,1.2fr)]">
           <aside className="rounded-2xl border border-black/8 bg-white p-3 xl:sticky xl:top-24 xl:h-[calc(100vh-120px)] xl:overflow-y-auto"><div className="flex items-center justify-between px-2 pb-3 pt-1"><p className="text-xs font-semibold uppercase tracking-[.14em] text-black/40">Covers</p><Button onClick={newDesign} variant="ghost" size="icon-sm" aria-label="Create new cover"><Plus /></Button></div>{designs.length === 0 && <button onClick={newDesign} className="w-full rounded-xl border border-dashed border-black/10 px-3 py-8 text-center text-sm text-black/45"><Plus className="mx-auto mb-2 size-5" />Create your first cover</button>}{designs.map((cover, index) => <div key={`${cover.grade}-${cover.subject}`} className={`group mb-1 flex items-center rounded-xl transition ${editingIndex === index ? 'bg-[#eaf1e2]' : 'hover:bg-black/[.035]'}`}><button onClick={() => selectDesign(index)} className="flex min-w-0 flex-1 items-center gap-3 p-2.5 text-left"><CoverImage link={cover.image} alt="" className="h-14 w-10 shrink-0 rounded object-contain" /><div className="min-w-0"><p className="text-xs text-black/40">{cover.grade}</p><p className="truncate text-sm font-semibold">{cover.subject}</p><p className="mt-0.5 text-[10px] text-black/35">{cover.version} · {cover.status}</p></div></button><Button onClick={() => void deleteDesign(index)} variant="ghost" size="icon-sm" className="mr-1 shrink-0 text-black/35 opacity-70 hover:bg-red-50 hover:text-red-600 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100" aria-label={`Delete ${cover.grade} ${cover.subject}`}><Trash2 /></Button></div>)}</aside>
 
-          <section className="rounded-2xl border border-black/8 bg-[#202821] p-5 xl:sticky xl:top-24 xl:flex xl:h-[calc(100vh-120px)] xl:flex-col"><div className="mb-4 flex items-center justify-between text-white"><div><p className="text-xs text-white/45">Live cover preview</p><p className="mt-1 font-semibold">{draft.grade || 'New cover'}{draft.subject ? ` · ${draft.subject}` : ''}</p></div><Palette className="size-5 text-[#d8ef83]" /></div><div className="flex min-h-[400px] flex-1 items-center justify-center overflow-hidden rounded-xl bg-black/20 p-4">{draft.image ? <CoverImage link={draft.image} alt="Cover preview" className="max-h-full max-w-full rounded-md object-contain shadow-2xl" /> : <div className="text-center text-white/35"><Link2 className="mx-auto mb-3 size-8" /><p className="text-sm">Paste a Google Drive image link</p></div>}</div><div className="mt-4 flex items-start gap-2 rounded-xl border border-white/10 bg-white/5 p-3 text-xs leading-5 text-white/55"><Link2 className="mt-0.5 size-4 shrink-0" />Use a direct JPG/PNG file link—not a folder link—and set access to “Anyone with the link.”</div></section>
+          <section className="rounded-2xl border border-black/8 bg-[#202821] p-5 xl:sticky xl:top-24 xl:flex xl:h-[calc(100vh-120px)] xl:flex-col"><div className="mb-4 flex items-center justify-between text-white"><div><p className="text-xs text-white/45">Live cover preview</p><p className="mt-1 font-semibold">{draft.grade || 'New cover'}{draft.subject ? ` · ${draft.subject}` : ''}</p></div><Palette className="size-5 text-[#d8ef83]" /></div><div className="flex min-h-[400px] flex-1 items-center justify-center overflow-hidden rounded-xl bg-black/20 p-4">{draft.image ? <CoverImage link={draft.image} alt="Cover preview" className="max-h-full max-w-full rounded-md object-contain shadow-2xl" onStatusChange={setPreviewImageStatus} /> : <div className="text-center text-white/35"><Link2 className="mx-auto mb-3 size-8" /><p className="text-sm">Paste a Google Drive image link</p></div>}</div>{draft.image && <div className={`mt-3 flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold ${imageHasProblem ? 'bg-red-500/15 text-red-200' : previewImageStatus === 'loaded' ? 'bg-emerald-500/15 text-emerald-200' : 'bg-white/8 text-white/55'}`}>{imageHasProblem ? <AlertCircle className="size-4" /> : previewImageStatus === 'loaded' ? <Check className="size-4" /> : <Link2 className="size-4" />}{imageHasProblem ? 'Image is not available in the client review' : previewImageStatus === 'loaded' ? 'Image ready for client review' : 'Checking image link…'}</div>}<div className="mt-4 flex items-start gap-2 rounded-xl border border-white/10 bg-white/5 p-3 text-xs leading-5 text-white/55"><Link2 className="mt-0.5 size-4 shrink-0" />Use a direct JPG/PNG file link—not a folder link—and set access to “Anyone with the link.”</div></section>
 
           <section ref={documentationForm} className="rounded-2xl border border-black/8 bg-white p-5 md:p-7 xl:h-[calc(100vh-120px)] xl:overflow-y-auto">
-            <div className="grid gap-4 sm:grid-cols-2"><div><label className="text-xs font-semibold text-black/60">Grade</label><Input value={draft.grade} onChange={(event) => { setSaved(false); setDraft({ ...draft, grade: event.target.value }); }} className="mt-2" /></div><div><label className="text-xs font-semibold text-black/60">Subject</label><Input value={draft.subject} onChange={(event) => { setSaved(false); setDraft({ ...draft, subject: event.target.value }); }} className="mt-2" /></div><div><label className="text-xs font-semibold text-black/60">Version</label><Input value={draft.version} onChange={(event) => { setSaved(false); setDraft({ ...draft, version: event.target.value }); }} className="mt-2" /></div><div><label className="text-xs font-semibold text-black/60">Status</label><select value={draft.status} onChange={(event) => { setSaved(false); setDraft({ ...draft, status: event.target.value }); }} className="mt-2 h-8 w-full rounded-lg border bg-white px-2.5 text-sm">{Object.keys(statusClass).map((status) => <option key={status}>{status}</option>)}</select></div></div>
-            <div className="mt-5"><label className="text-xs font-semibold text-black/60">Google Drive image link</label><Input value={draft.image} onChange={(event) => { setSaved(false); setDraft({ ...draft, image: event.target.value }); }} className="mt-2" placeholder="https://drive.google.com/file/d/.../view" /><p className="mt-2 text-xs leading-5 text-black/40">Paste the sharing link for a JPG or PNG stored in Google Drive. Coverdesk stores only this link.</p></div>
+            <div className="grid gap-4 sm:grid-cols-2"><div><label className="text-xs font-semibold text-black/60">Grade</label><Input value={draft.grade} onChange={(event) => { setSaved(false); setDraft({ ...draft, grade: event.target.value }); }} aria-invalid={!gradeIsValid} className={`mt-2 ${!gradeIsValid ? 'border-red-500 bg-red-50/50 focus-visible:ring-red-200' : ''}`} />{!gradeIsValid && <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-red-600"><AlertCircle className="size-3.5" />Use the exact format “Grade 1” to “Grade 7”.</p>}</div><div><label className="text-xs font-semibold text-black/60">Subject</label><Input value={draft.subject} onChange={(event) => { setSaved(false); setDraft({ ...draft, subject: event.target.value }); }} className="mt-2" /></div><div><label className="text-xs font-semibold text-black/60">Version</label><Input value={draft.version} onChange={(event) => { setSaved(false); setDraft({ ...draft, version: event.target.value }); }} className="mt-2" /></div><div><label className="text-xs font-semibold text-black/60">Status</label><select value={draft.status} onChange={(event) => { setSaved(false); setDraft({ ...draft, status: event.target.value }); }} className="mt-2 h-8 w-full rounded-lg border bg-white px-2.5 text-sm">{Object.keys(statusClass).map((status) => <option key={status}>{status}</option>)}</select></div></div>
+            <div className="mt-5"><label className="text-xs font-semibold text-black/60">Google Drive image link</label><Input value={draft.image} onChange={(event) => { setSaved(false); setDraft({ ...draft, image: event.target.value }); }} aria-invalid={imageHasProblem} className={`mt-2 ${imageHasProblem ? 'border-red-500 bg-red-50/50 focus-visible:ring-red-200' : ''}`} placeholder="https://drive.google.com/file/d/.../view" />{imageHasProblem ? <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-red-600"><AlertCircle className="size-3.5" />This image cannot be displayed. Check the link and set Drive access to “Anyone with the link”.</p> : <p className="mt-2 text-xs leading-5 text-black/40">Paste the sharing link for a JPG or PNG stored in Google Drive. Coverdesk stores only this link.</p>}</div>
             <div className="mt-7 border-t border-black/8 pt-6"><h2 className="font-semibold">Design concept</h2><label className="mt-4 block text-xs font-semibold text-black/60">Main concept</label><Textarea value={draft.concept} onChange={(event) => { setSaved(false); setDraft({ ...draft, concept: event.target.value }); }} className="mt-2 min-h-24" /><label className="mt-4 block text-xs font-semibold text-black/60">Theme and inspiration</label><Textarea value={draft.inspiration} onChange={(event) => { setSaved(false); setDraft({ ...draft, inspiration: event.target.value }); }} className="mt-2 min-h-20" /></div>
             <div className="mt-7 border-t border-black/8 pt-6"><h2 className="font-semibold">Visual system</h2><label className="mt-4 block text-xs font-semibold text-black/60">Fonts and typography</label><Textarea value={draft.details?.typography || ''} onChange={(event) => { setSaved(false); setDetail('typography', event.target.value); }} className="mt-2" placeholder="Font family, weights, title hierarchy…" /><label className="mt-4 block text-xs font-semibold text-black/60">Illustration, character and icon style</label><Textarea value={draft.details?.illustration || ''} onChange={(event) => { setSaved(false); setDetail('illustration', event.target.value); }} className="mt-2" placeholder="Illustration technique, character rules, shapes…" /><label className="mt-4 block text-xs font-semibold text-black/60">Series consistency</label><Textarea value={draft.details?.consistency || ''} onChange={(event) => { setSaved(false); setDetail('consistency', event.target.value); }} className="mt-2" placeholder="Shared elements and grade differentiation…" /></div>
             <div className="mt-7 border-t border-black/8 pt-6"><h2 className="font-semibold">Production and handoff</h2>{([['specifications', 'Cover specifications', 'Dimensions, bleed, safe margin, spine, CMYK, DPI…'], ['delivered', 'Files delivered', 'Source file, print PDF, previews, fonts, links…'], ['usage', 'Usage guidelines', 'Editable and protected elements, future-cover rules…'], ['approval', 'Approval notes', 'Version, date, client feedback and revisions…']] as const).map(([key, label, placeholder]) => <div key={key}><label className="mt-4 block text-xs font-semibold text-black/60">{label}</label><Textarea value={draft.details?.[key] || ''} onChange={(event) => { setSaved(false); setDetail(key, event.target.value); }} className="mt-2" placeholder={placeholder} /></div>)}</div>
-            <Button onClick={saveDesign} size="lg" className="mt-7 w-full"><Save />Save and update client review</Button>
+            <Button onClick={saveDesign} disabled={!canSave} size="lg" className="mt-7 w-full"><Save />Save and update client review</Button>
           </section>
         </div>
       </div>}
@@ -293,7 +335,15 @@ export default function Home() {
                 if (!detail?.trim()) return null;
                 return <section key={section.title} className="mt-8 border-t border-black/8 pt-7"><div className="flex items-baseline gap-3"><span className="text-xs font-semibold text-[#718278]">0{sectionIndex + 1}</span><h3 className="text-base font-semibold">{section.title}</h3></div><p className="mt-4 whitespace-pre-line rounded-xl bg-[#f0f3ed] p-4 text-sm leading-6 text-black/62">{detail}</p></section>;
               })}
-              <div className="mt-9 rounded-2xl bg-[#eef3e9] p-5"><p className="text-xs font-semibold uppercase tracking-[.14em] text-[#5f7466]">Approval</p><p className="mt-2 text-sm font-medium">Designer: __________________</p><p className="mt-2 text-sm font-medium">Client: ____________________</p><p className="mt-2 text-sm text-black/50">Date: ______________________</p></div>
+              <form onSubmit={approveCover} className={`mt-9 rounded-2xl border p-5 transition ${active.approval ? 'border-emerald-200 bg-emerald-50/75' : 'border-black/7 bg-[#eef3e9]'}`}>
+                <div className="flex items-center justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-[.14em] text-[#5f7466]">Approval</p><p className="mt-1 text-xs leading-5 text-black/45">Client name and approval date are required.</p></div>{active.approval && <span className="inline-flex items-center gap-1 rounded-full bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white"><Check className="size-3.5" />Approved</span>}</div>
+                <label className="mt-4 block text-xs font-semibold text-black/60" htmlFor="approval-client">Client name</label>
+                <Input id="approval-client" value={approvalDraft.client} onChange={(event) => { setApprovalSaved(false); setApprovalDraft({ ...approvalDraft, client: event.target.value }); }} className="mt-2 bg-white/85" placeholder="Enter client name" required />
+                <label className="mt-4 block text-xs font-semibold text-black/60" htmlFor="approval-date">Approval date</label>
+                <Input id="approval-date" type="date" value={approvalDraft.date} onChange={(event) => { setApprovalSaved(false); setApprovalDraft({ ...approvalDraft, date: event.target.value }); }} className="mt-2 bg-white/85" required />
+                <Button type="submit" disabled={approvalSaving || !approvalDraft.client.trim() || !approvalDraft.date} className="mt-4 w-full bg-emerald-700 text-white hover:bg-emerald-800"><Check />{approvalSaving ? 'Saving approval…' : active.approval ? 'Update approval' : 'Approve cover'}</Button>
+                {approvalSaved && <p className="mt-3 flex items-center justify-center gap-1.5 text-xs font-semibold text-emerald-700"><Check className="size-4" />Approval saved and cover status updated.</p>}
+              </form>
               <section className="mt-9 border-t border-black/8 pt-8">
                 <div className="flex items-center justify-between"><div><p className="text-xs font-semibold uppercase tracking-[.14em] text-[#66796d]">Discussion</p><h3 className="mt-1 text-lg font-semibold">Comments</h3></div><span className="grid size-9 place-items-center rounded-full bg-[#1b2a21] text-sm font-semibold text-white">{selected !== null ? (comments[selected]?.length || 0) : 0}</span></div>
                 <div className="mt-5 space-y-4">{(selected !== null ? (comments[selected] || []) : []).map((comment: Comment) => <article key={comment.id} className={`group rounded-2xl border p-4 transition ${comment.done ? 'border-emerald-200 bg-emerald-50/70' : 'border-black/7 bg-white'}`}><div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><span className={`grid size-7 place-items-center rounded-full text-xs font-bold ${comment.done ? 'bg-emerald-500 text-white' : 'bg-[#dce9cf] text-[#334d3c]'}`}>{comment.done ? <Check className="size-4" /> : comment.name.charAt(0).toUpperCase()}</span><p className="text-sm font-semibold">{comment.name}</p></div><div className="flex items-center gap-1"><time className="text-[10px] text-black/35">{comment.time}</time><Button onClick={() => void deleteComment(comment.id)} variant="ghost" size="icon-sm" className="text-black/30 hover:bg-red-50 hover:text-red-600 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100" aria-label={`Delete comment by ${comment.name}`}><Trash2 /></Button></div></div><p className={`mt-3 text-sm leading-5 ${comment.done ? 'text-black/45 line-through decoration-black/20' : 'text-black/60'}`}>{comment.text}</p><Button onClick={() => void toggleCommentDone(comment.id)} variant={comment.done ? 'outline' : 'default'} size="sm" className={`mt-4 ${comment.done ? 'border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}><Check />{comment.done ? 'Done · Reopen' : 'Mark done'}</Button></article>)}</div>
