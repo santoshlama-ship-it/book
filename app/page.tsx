@@ -86,6 +86,11 @@ function CoverImage({ link, alt, className, onStatusChange }: { link: string; al
   return <img src={displayImageUrl(link)} alt={alt} className={className} referrerPolicy="no-referrer" onLoad={() => onStatusChange?.('loaded')} onError={() => { setFailed(true); onStatusChange?.('error'); }} />;
 }
 
+function versionNumber(version: string) {
+  const match = version.match(/\d+(?:\.\d+)?/);
+  return match ? Number(match[0]) : 0;
+}
+
 export default function Home() {
   const [mode, setMode] = useState<'review' | 'designer'>('review');
   const [query, setQuery] = useState('');
@@ -113,6 +118,14 @@ export default function Home() {
     { name: 'Foundation Series', grades: 'Grades 1–3', description: 'A shared playful visual system with friendly characters, bright colours and simple learning cues.', accent: '#d8ef83', items: visible.filter((cover) => Number(cover.grade.replace('Grade ', '')) <= 3) },
     { name: 'Upper Series', grades: 'Grades 4–7', description: 'A more mature visual system with richer detail, structured layouts and subject-led imagery.', accent: '#f1c870', items: visible.filter((cover) => Number(cover.grade.replace('Grade ', '')) >= 4) },
   ];
+  const navigationIndexes = galleryGroups.flatMap((group) =>
+    [...new Set(group.items.map((cover) => cover.subject.trim() || 'Untitled subject'))]
+      .sort((a, b) => a.localeCompare(b))
+      .flatMap((subject) => group.items
+        .filter((cover) => (cover.subject.trim() || 'Untitled subject') === subject)
+        .sort((a, b) => versionNumber(a.grade) - versionNumber(b.grade) || versionNumber(a.version) - versionNumber(b.version))
+        .map((cover) => designs.indexOf(cover)))
+  );
   useEffect(() => {
     const close = (event: KeyboardEvent) => event.key === 'Escape' && setSelected(null);
     window.addEventListener('keydown', close);
@@ -147,7 +160,14 @@ export default function Home() {
   }, []);
   const active = selected === null ? null : designs[selected];
   const activeComments = selected === null ? [] : (comments[selected] || []);
-  const move = (direction: number) => setSelected((current) => current === null ? 0 : (current + direction + designs.length) % designs.length);
+  const activeVersionLabel = active ? `Version ${versionNumber(active.version) || active.version}` : '';
+  const activeHasMultipleVersions = active ? designs.filter((cover) => cover.grade === active.grade && cover.subject.trim().toLowerCase() === active.subject.trim().toLowerCase()).length > 1 : false;
+  const move = (direction: number) => setSelected((current) => {
+    if (navigationIndexes.length === 0) return null;
+    if (current === null) return navigationIndexes[0];
+    const position = navigationIndexes.indexOf(current);
+    return navigationIndexes[(Math.max(position, 0) + direction + navigationIndexes.length) % navigationIndexes.length];
+  });
   const changeZoom = (amount: number) => setZoom((current) => Math.min(3, Math.max(1, Number((current + amount).toFixed(2)))));
   const zoomWithWheel = (event: WheelEvent<HTMLElement>) => {
     event.preventDefault();
@@ -249,10 +269,11 @@ export default function Home() {
     localStorage.setItem('coverdesk-comments-production', JSON.stringify(next));
     await fetch('/api/state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ comments: next }) });
   };
-  const renderCoverCard = (cover: Cover) => {
+  const renderCoverCard = (cover: Cover, showVersionLabel = false) => {
     const index = designs.indexOf(cover);
     const commentCount = (comments[index] || []).filter((comment) => !comment.done).length;
-    return <button key={cover.id || `${cover.grade}-${cover.subject}-${cover.version}`} onClick={() => setSelected(index)} className="group overflow-hidden rounded-[24px] border border-white/80 bg-white/70 text-left shadow-[0_12px_35px_rgba(30,34,24,.08),inset_0_1px_0_rgba(255,255,255,.9)] backdrop-blur-xl transition duration-300 hover:-translate-y-1.5 hover:shadow-[0_22px_50px_rgba(30,34,24,.14)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#d5ff3d]">
+    return <button key={cover.id || `${cover.grade}-${cover.subject}-${cover.version}`} onClick={() => setSelected(index)} className="group overflow-hidden rounded-[20px] border border-white/80 bg-white/70 text-left shadow-[0_12px_35px_rgba(30,34,24,.08),inset_0_1px_0_rgba(255,255,255,.9)] backdrop-blur-xl transition duration-300 hover:-translate-y-1.5 hover:shadow-[0_22px_50px_rgba(30,34,24,.14)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#d5ff3d]">
+      {showVersionLabel && <div className="mx-4 mb-3 mt-4 rounded-full bg-[#eef1ea] px-3 py-2 text-center text-xs font-bold tracking-[.04em] text-[#405048]">Version {versionNumber(cover.version) || cover.version}</div>}
       <div className="aspect-video overflow-hidden bg-[#e8e8e3]"><CoverImage link={cover.image} alt={`${cover.grade} ${cover.subject} book cover`} className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.015]" /></div>
       <div className="p-4"><div className="mb-2 flex items-center justify-between gap-2"><span className="text-xs font-medium text-black/45">{cover.grade}</span><Badge className={statusClass[cover.status]}>{cover.status}</Badge></div><h3 className="text-lg font-semibold tracking-tight">{cover.subject}</h3><div className="mt-3 flex items-center justify-between border-t border-black/7 pt-3 text-xs text-black/45"><span>{cover.version}</span><span className="flex items-center gap-2">{commentCount > 0 && <span className="flex min-w-6 items-center justify-center gap-1 rounded-full bg-red-500 px-2 py-1 font-semibold text-white shadow-[0_0_0_3px_rgba(239,68,68,.14),0_5px_14px_rgba(239,68,68,.25)]" aria-label={`${commentCount} unresolved comment${commentCount === 1 ? '' : 's'}`}><MessageCircle className="size-3" />{commentCount}</span>}<span className="font-medium text-[#42604d]">View <ChevronRight className="inline size-3.5" /></span></span></div></div>
     </button>;
@@ -299,9 +320,16 @@ export default function Home() {
             {group.items.length > 0 ? <div className="space-y-9">
               {[...new Set(group.items.map((cover) => cover.subject.trim() || 'Untitled subject'))].sort((a, b) => a.localeCompare(b)).map((subject) => {
                 const subjectCovers = group.items.filter((cover) => (cover.subject.trim() || 'Untitled subject') === subject);
-                return <section key={subject} className="rounded-[24px] border border-black/7 bg-white/42 p-4 md:p-5">
-                  <div className="mb-5 border-b border-black/7 pb-4"><p className="text-[10px] font-semibold uppercase tracking-[.16em] text-[#718278]">Subject</p><h3 className="mt-1 text-xl font-semibold tracking-tight">{subject}</h3></div>
-                  <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{subjectCovers.map(renderCoverCard)}</div>
+                return <section key={subject} className="rounded-[24px] border border-black/7 bg-white/42 p-5 md:p-7">
+                  <div className="mb-7 border-b border-black/7 pb-5"><p className="text-[10px] font-semibold uppercase tracking-[.16em] text-[#718278]">Subject</p><h3 className="mt-1 text-xl font-semibold tracking-tight">{subject}</h3></div>
+                  <div className="grid gap-7 xl:grid-cols-2">{[...new Set(subjectCovers.map((cover) => cover.grade))].sort((a, b) => versionNumber(a) - versionNumber(b)).map((grade) => {
+                    const gradeCovers = subjectCovers.filter((cover) => cover.grade === grade).sort((a, b) => versionNumber(a.version) - versionNumber(b.version));
+                    const hasMultipleVersions = gradeCovers.length > 1;
+                    return <section key={grade} className="rounded-[22px] border border-black/7 bg-white/55 p-5">
+                      <div className="mb-5 flex items-center justify-between gap-3"><h4 className="font-semibold">{grade}</h4>{hasMultipleVersions && <Badge variant="outline" className="bg-white">{gradeCovers.length} versions</Badge>}</div>
+                      <div className={`grid gap-5 ${hasMultipleVersions ? 'sm:grid-cols-2' : ''}`}>{gradeCovers.map((cover) => renderCoverCard(cover, hasMultipleVersions))}</div>
+                    </section>;
+                  })}</div>
                 </section>;
               })}
             </div> : <div className="rounded-2xl border border-dashed border-black/10 bg-white/60 px-5 py-10 text-center text-sm text-black/40">{query ? 'No covers in this group match your search.' : 'No covers added yet.'}</div>}
@@ -316,6 +344,7 @@ export default function Home() {
             <div className={`flex h-full w-full select-none items-center justify-center ease-out ${dragging ? '' : 'transition-transform duration-150'}`} style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
               <div onClick={placePin} className={`relative inline-grid max-h-full max-w-full ${active.status === 'Changes Needed' ? 'cursor-crosshair' : ''}`}>
                 <CoverImage link={active.image} alt={`${active.grade} ${active.subject} full cover`} className="pointer-events-none col-start-1 row-start-1 block max-h-full max-w-full rounded-lg object-contain shadow-[0_30px_80px_rgba(0,0,0,.38)]" />
+                {activeHasMultipleVersions && <span className="pointer-events-none absolute left-3 top-3 z-30 rounded-full border border-[#b9d84a] bg-[#e9ff8b] px-4 py-1.5 text-sm font-bold text-[#26341f] shadow-[0_5px_18px_rgba(28,39,23,.22)]">{activeVersionLabel}</span>}
                 {activeComments.filter((comment) => comment.pin).map((comment, pinIndex) => <button key={comment.id} type="button" onClick={(event) => event.stopPropagation()} title={comment.text} aria-label={`Pinned comment ${pinIndex + 1}: ${comment.text}`} className="absolute z-20 grid size-7 -translate-x-1/2 -translate-y-full place-items-center rounded-full bg-red-500 text-xs font-bold text-white shadow-[0_5px_18px_rgba(239,68,68,.55)] ring-2 ring-white" style={{ left: `${comment.pin!.x}%`, top: `${comment.pin!.y}%` }}>{pinIndex + 1}</button>)}
                 {pendingPin && <span className="pointer-events-none absolute z-20 grid size-8 -translate-x-1/2 -translate-y-full place-items-center rounded-full bg-[#d8ff3e] text-xs font-bold text-[#172019] shadow-[0_5px_20px_rgba(216,255,62,.45)] ring-2 ring-white" style={{ left: `${pendingPin.x}%`, top: `${pendingPin.y}%` }}><MapPin className="size-4" /></span>}
               </div>
@@ -332,7 +361,7 @@ export default function Home() {
           </section>
 
           <aside className="min-h-0 overflow-y-auto border-l border-black/8 bg-[#fbfbf8]">
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-black/8 bg-[#fbfbf8]/95 px-6 py-4 backdrop-blur"><div className="flex gap-2"><Badge className={statusClass[active.status]}>{active.status}</Badge><Badge variant="outline">{active.version}</Badge></div><Button onClick={() => setSelected(null)} variant="ghost" size="icon" aria-label="Close documentation"><X /></Button></div>
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-black/8 bg-[#fbfbf8]/95 px-6 py-4 backdrop-blur"><Badge className={statusClass[active.status]}>{active.status}</Badge><Button onClick={() => setSelected(null)} variant="ghost" size="icon" aria-label="Close documentation"><X /></Button></div>
             <div className="flex flex-col p-6 md:p-7">
               <div className="order-first"><p className="text-xs font-semibold uppercase tracking-[.17em] text-[#66796d]">{active.grade}</p><h2 className="mt-2 text-3xl font-semibold tracking-[-.035em]">{active.subject}</h2></div>
               {(active.concept?.trim() || active.inspiration?.trim() || active.details?.illustration?.trim()) && <section className="mt-8"><h3 className="text-base font-semibold">Design Concept</h3>{active.concept?.trim() && <p className="mt-3 whitespace-pre-line text-sm leading-6 text-black/60">{active.concept}</p>}{active.inspiration?.trim() && <div className="mt-5 rounded-xl bg-[#f0f3ed] p-4"><p className="text-xs font-semibold uppercase tracking-[.12em] text-[#63766a]">Theme and inspiration</p><p className="mt-2 whitespace-pre-line text-sm leading-6 text-black/60">{active.inspiration}</p></div>}{active.details?.illustration?.trim() && <div className="mt-4 rounded-xl bg-[#f0f3ed] p-4"><p className="text-xs font-semibold uppercase tracking-[.12em] text-[#63766a]">Illustration system</p><p className="mt-2 whitespace-pre-line text-sm leading-6 text-black/60">{active.details.illustration}</p></div>}</section>}
