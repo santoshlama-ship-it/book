@@ -27,6 +27,8 @@ export async function ensureDatabaseTables() {
   await sql`UPDATE coverdesk_covers SET cover_id = 'legacy-' || position WHERE cover_id IS NULL`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS coverdesk_covers_cover_id_idx ON coverdesk_covers (cover_id)`;
   await sql`ALTER TABLE coverdesk_comments ADD COLUMN IF NOT EXISTS cover_id TEXT`;
+  await sql`ALTER TABLE coverdesk_comments ADD COLUMN IF NOT EXISTS pin_x DOUBLE PRECISION`;
+  await sql`ALTER TABLE coverdesk_comments ADD COLUMN IF NOT EXISTS pin_y DOUBLE PRECISION`;
   await sql`UPDATE coverdesk_comments AS comments SET cover_id = covers.cover_id FROM coverdesk_covers AS covers WHERE comments.cover_id IS NULL AND comments.cover_position = covers.position`;
   await sql`ALTER TABLE coverdesk_approval_history ADD COLUMN IF NOT EXISTS cover_id TEXT`;
   await sql`UPDATE coverdesk_approval_history AS history SET cover_id = covers.cover_id FROM coverdesk_covers AS covers WHERE history.cover_id IS NULL AND history.cover_position = covers.position`;

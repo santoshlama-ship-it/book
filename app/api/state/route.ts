@@ -1,4 +1,5 @@
 import { ensureDatabaseTables, getDatabase } from '@/lib/db';
+import { isGoogleSheetSyncConfigured, readGoogleSheetState, writeGoogleSheetState, type SyncedState } from '@/lib/google-sheet-sync';
 
 export const runtime = 'nodejs';
 
@@ -9,7 +10,20 @@ type Cover = {
   palette?: unknown[]; concept?: string; inspiration?: string;
   details?: Record<string, unknown>; approval?: Approval;
 };
-type Comment = { id: number; name: string; text: string; time: string; done?: boolean };
+type Comment = { id: number; name: string; text: string; time: string; done?: boolean; pin?: { x: number; y: number } };
+
+function normaliseStatus(value: string) {
+  const statuses: Record<string, string> = {
+    'approved': 'Approved',
+    'ready for review': 'Ready for Review', 'client review': 'Ready for Review',
+    'changes needed': 'Changes Needed', 'needs changes': 'Changes Needed',
+    'working on': 'Working On', 'in design': 'Working On',
+    'not started': 'Not Started', 'brief ready': 'Not Started',
+    'redo': 'Redo',
+    'on hold': 'On Hold',
+  };
+  return statuses[value.trim().toLowerCase()] || 'Not Started';
+}
 
 async function replaceDesigns(designs: Cover[], recordHistory = true) {
   const sql = getDatabase();
@@ -33,7 +47,7 @@ async function replaceDesigns(designs: Cover[], recordHistory = true) {
     const coverId = cover.id || `legacy-${position}`;
     await sql`
       INSERT INTO coverdesk_covers (position, cover_id, grade, subject, status, version, image_url, palette, concept, inspiration, details, approval_client, approval_date)
-      VALUES (${position}, ${coverId}, ${cover.grade}, ${cover.subject}, ${cover.status}, ${cover.version}, ${cover.image || ''}, ${JSON.stringify(cover.palette || [])}::jsonb, ${cover.concept || ''}, ${cover.inspiration || ''}, ${JSON.stringify(cover.details || {})}::jsonb, ${cover.approval?.client || null}, ${cover.approval?.date || null})
+      VALUES (${position}, ${coverId}, ${cover.grade}, ${cover.subject}, ${normaliseStatus(cover.status)}, ${cover.version}, ${cover.image || ''}, ${JSON.stringify(cover.palette || [])}::jsonb, ${cover.concept || ''}, ${cover.inspiration || ''}, ${JSON.stringify(cover.details || {})}::jsonb, ${cover.approval?.client || null}, ${cover.approval?.date || null})
     `;
   }
 }
@@ -45,7 +59,7 @@ async function replaceComments(comments: Record<string, Comment[]>) {
   await sql`DELETE FROM coverdesk_comments`;
   for (const [coverPosition, items] of Object.entries(comments)) {
     for (const comment of items) {
-      await sql`INSERT INTO coverdesk_comments (cover_position, cover_id, id, name, body, display_time, done) VALUES (${Number(coverPosition)}, ${coverIds.get(Number(coverPosition)) || null}, ${comment.id}, ${comment.name}, ${comment.text}, ${comment.time}, ${Boolean(comment.done)})`;
+      await sql`INSERT INTO coverdesk_comments (cover_position, cover_id, id, name, body, display_time, done, pin_x, pin_y) VALUES (${Number(coverPosition)}, ${coverIds.get(Number(coverPosition)) || null}, ${comment.id}, ${comment.name || 'Reviewer'}, ${comment.text}, ${comment.time}, ${Boolean(comment.done)}, ${comment.pin?.x ?? null}, ${comment.pin?.y ?? null})`;
     }
   }
 }
@@ -73,23 +87,41 @@ async function prepareDatabase() {
   await migrateLegacyStateOnce();
 }
 
+async function readDatabaseState(): Promise<SyncedState> {
+  const sql = getDatabase();
+  const coverRows = await sql`SELECT position, cover_id, grade, subject, status, version, image_url, palette, concept, inspiration, details, approval_client, approval_date FROM coverdesk_covers ORDER BY position` as unknown as Array<Record<string, unknown>>;
+  const commentRows = await sql`SELECT cover_position, id, name, body, display_time, done, pin_x, pin_y FROM coverdesk_comments ORDER BY cover_position, created_at, id` as unknown as Array<{ cover_position: number; id: string | number; name: string; body: string; display_time: string; done: boolean; pin_x: number | null; pin_y: number | null }>;
+  const designs = coverRows.map((row) => ({
+    id: String(row.cover_id || ''), grade: String(row.grade || ''), subject: String(row.subject || ''), status: normaliseStatus(String(row.status || '')), version: String(row.version || ''), image: String(row.image_url || ''),
+    palette: Array.isArray(row.palette) ? row.palette : [], concept: String(row.concept || ''), inspiration: String(row.inspiration || ''), details: (row.details || {}) as Record<string, unknown>,
+    ...(row.approval_client ? { approval: { designer: '', client: String(row.approval_client), date: String(row.approval_date || '').slice(0, 10) } } : {}),
+  }));
+  const comments = commentRows.reduce<Record<string, Comment[]>>((result, row) => {
+    const key = String(row.cover_position);
+    (result[key] ||= []).push({ id: Number(row.id), name: row.name, text: row.body, time: row.display_time, done: row.done, ...(row.pin_x !== null && row.pin_y !== null ? { pin: { x: Number(row.pin_x), y: Number(row.pin_y) } } : {}) });
+    return result;
+  }, {});
+  return { designs, comments };
+}
+
 export async function GET() {
   try {
     await prepareDatabase();
-    const sql = getDatabase();
-    const coverRows = await sql`SELECT position, cover_id, grade, subject, status, version, image_url, palette, concept, inspiration, details, approval_client, approval_date FROM coverdesk_covers ORDER BY position` as unknown as Array<Record<string, unknown>>;
-    const commentRows = await sql`SELECT cover_position, id, name, body, display_time, done FROM coverdesk_comments ORDER BY cover_position, created_at, id` as unknown as Array<{ cover_position: number; id: string | number; name: string; body: string; display_time: string; done: boolean }>;
-    const designs = coverRows.map((row) => ({
-      id: row.cover_id, grade: row.grade, subject: row.subject, status: row.status, version: row.version, image: row.image_url,
-      palette: row.palette, concept: row.concept, inspiration: row.inspiration, details: row.details,
-      ...(row.approval_client ? { approval: { designer: '', client: row.approval_client, date: String(row.approval_date || '').slice(0, 10) } } : {}),
-    }));
-    const comments = commentRows.reduce<Record<string, Comment[]>>((result, row) => {
-      const key = String(row.cover_position);
-      (result[key] ||= []).push({ id: Number(row.id), name: row.name, text: row.body, time: row.display_time, done: row.done });
-      return result;
-    }, {});
-    return Response.json({ designs, comments });
+    let sheetSync: 'connected' | 'not-configured' | 'unavailable' = isGoogleSheetSyncConfigured() ? 'connected' : 'not-configured';
+    if (isGoogleSheetSyncConfigured()) {
+      try {
+        const sheetState = await readGoogleSheetState();
+        if (sheetState) {
+          await replaceDesigns(sheetState.designs, false);
+          await replaceComments(sheetState.comments);
+        }
+      } catch (error) {
+        sheetSync = 'unavailable';
+        console.error('[api/state] Google Sheets read failed; using Neon data', error);
+      }
+    }
+    const state = await readDatabaseState();
+    return Response.json({ ...state, sheetSync });
   } catch (error) {
     console.error('[api/state] read failed', error);
     return Response.json({ error: 'Unable to load saved data' }, { status: 500 });
@@ -102,7 +134,16 @@ export async function PUT(request: Request) {
     await prepareDatabase();
     if (body.designs !== undefined) await replaceDesigns(body.designs);
     if (body.comments !== undefined) await replaceComments(body.comments);
-    return Response.json({ ok: true });
+    let sheetSync: 'connected' | 'not-configured' | 'unavailable' = isGoogleSheetSyncConfigured() ? 'connected' : 'not-configured';
+    if (isGoogleSheetSyncConfigured()) {
+      try {
+        await writeGoogleSheetState(await readDatabaseState());
+      } catch (error) {
+        sheetSync = 'unavailable';
+        console.error('[api/state] Google Sheets write failed; Neon save completed', error);
+      }
+    }
+    return Response.json({ ok: true, sheetSync });
   } catch (error) {
     console.error('[api/state] write failed', error);
     return Response.json({ error: 'Unable to save data' }, { status: 500 });

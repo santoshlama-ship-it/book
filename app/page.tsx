@@ -1,7 +1,7 @@
 'use client';
 
-import { type FormEvent, type PointerEvent as ReactPointerEvent, type WheelEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Check, ChevronLeft, ChevronRight, Eye, FileText, Layers3, Link2, MessageCircle, Palette, Pencil, Plus, RotateCcw, Save, Search, Send, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type WheelEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertCircle, Check, ChevronLeft, ChevronRight, Eye, FileText, Layers3, Link2, MapPin, MessageCircle, Palette, Pencil, Plus, RotateCcw, Save, Search, Send, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -33,12 +33,12 @@ type Cover = {
   };
 };
 
-type Comment = { id: number; name: string; text: string; time: string; done?: boolean };
+type Comment = { id: number; name: string; text: string; time: string; done?: boolean; pin?: { x: number; y: number } };
 
 const initialComments: Record<number, Comment[]> = {};
 const covers: Cover[] = [];
 const blankCover: Cover = {
-  grade: '', subject: '', status: 'Brief ready', version: 'V1', image: '', palette: [], concept: '', inspiration: '',
+  grade: '', subject: '', status: 'Not Started', version: 'V1', image: '', palette: [], concept: '', inspiration: '',
   details: { typography: '', illustration: '', consistency: '', specifications: '', delivered: '', usage: '', approval: '' },
 };
 
@@ -53,9 +53,16 @@ const documentation = [
 const detailKeys = ['typography', 'consistency', 'specifications', 'delivered', 'usage', 'approval'] as const;
 
 const statusClass: Record<string, string> = {
-  'Client review': 'bg-blue-50 text-blue-700', 'In design': 'bg-violet-50 text-violet-700', Approved: 'bg-emerald-50 text-emerald-700',
-  'Needs changes': 'bg-amber-50 text-amber-700', 'Brief ready': 'bg-stone-100 text-stone-600',
+  Approved: 'bg-emerald-50 text-emerald-700',
+  'Ready for Review': 'bg-amber-50 text-amber-700',
+  'Changes Needed': 'bg-orange-50 text-orange-700',
+  'Working On': 'bg-blue-50 text-blue-700',
+  'Not Started': 'bg-amber-950 text-white',
+  Redo: 'bg-rose-50 text-rose-700',
+  'On Hold': 'bg-slate-100 text-slate-700',
 };
+const reviewStatuses = ['Approved', 'Changes Needed', 'Redo', 'On Hold'] as const;
+type ReviewStatus = (typeof reviewStatuses)[number];
 
 function driveFileId(link: string) {
   const pathMatch = link.match(/drive\.google\.com\/file\/d\/([^/]+)/);
@@ -89,15 +96,13 @@ export default function Home() {
   const [saved, setSaved] = useState(false);
   const [previewImageStatus, setPreviewImageStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
   const [comments, setComments] = useState<Record<number, Comment[]>>(initialComments);
-  const [commenterName, setCommenterName] = useState('');
   const [commentText, setCommentText] = useState('');
-  const [approvalDraft, setApprovalDraft] = useState({ designer: '', client: '', date: '' });
-  const [approvalSaving, setApprovalSaving] = useState(false);
-  const [approvalSaved, setApprovalSaved] = useState(false);
+  const [pendingPin, setPendingPin] = useState<{ x: number; y: number } | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const dragStart = useRef({ pointerX: 0, pointerY: 0, panX: 0, panY: 0 });
+  const didDrag = useRef(false);
   const documentationForm = useRef<HTMLElement>(null);
   const gradeIsValid = /^Grade [1-7]$/.test(draft.grade.trim());
   const imageLinkIsValid = !draft.image.trim() || Boolean(driveFileId(draft.image)) || /^https?:\/\/\S+$/i.test(draft.image.trim());
@@ -114,12 +119,7 @@ export default function Home() {
     document.body.style.overflow = selected === null ? '' : 'hidden';
     return () => { window.removeEventListener('keydown', close); document.body.style.overflow = ''; };
   }, [selected]);
-  useEffect(() => { setZoom(1); setPan({ x: 0, y: 0 }); setDragging(false); }, [selected]);
-  useEffect(() => {
-    if (selected === null) return;
-    setApprovalDraft(designs[selected]?.approval || { designer: '', client: '', date: '' });
-    setApprovalSaved(false);
-  }, [selected, designs]);
+  useEffect(() => { setZoom(1); setPan({ x: 0, y: 0 }); setDragging(false); setPendingPin(null); setCommentText(''); }, [selected]);
   useEffect(() => { if (zoom === 1) setPan({ x: 0, y: 0 }); }, [zoom]);
   useEffect(() => {
     const loadState = async () => {
@@ -146,6 +146,7 @@ export default function Home() {
     void loadState();
   }, []);
   const active = selected === null ? null : designs[selected];
+  const activeComments = selected === null ? [] : (comments[selected] || []);
   const move = (direction: number) => setSelected((current) => current === null ? 0 : (current + direction + designs.length) % designs.length);
   const changeZoom = (amount: number) => setZoom((current) => Math.min(3, Math.max(1, Number((current + amount).toFixed(2)))));
   const zoomWithWheel = (event: WheelEvent<HTMLElement>) => {
@@ -156,10 +157,12 @@ export default function Home() {
     if (zoom <= 1 || (event.target as HTMLElement).closest('button')) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     dragStart.current = { pointerX: event.clientX, pointerY: event.clientY, panX: pan.x, panY: pan.y };
+    didDrag.current = false;
     setDragging(true);
   };
   const movePan = (event: ReactPointerEvent<HTMLElement>) => {
     if (!dragging) return;
+    if (Math.abs(event.clientX - dragStart.current.pointerX) > 3 || Math.abs(event.clientY - dragStart.current.pointerY) > 3) didDrag.current = true;
     setPan({ x: dragStart.current.panX + event.clientX - dragStart.current.pointerX, y: dragStart.current.panY + event.clientY - dragStart.current.pointerY });
   };
   const stopPan = (event: ReactPointerEvent<HTMLElement>) => {
@@ -209,13 +212,28 @@ export default function Home() {
   };
   const submitComment = (event: FormEvent) => {
     event.preventDefault();
-    if (selected === null || !commenterName.trim() || !commentText.trim()) return;
-    const comment = { id: Date.now(), name: commenterName.trim(), text: commentText.trim(), time: 'Just now', done: false };
+    if (selected === null || active?.status !== 'Changes Needed' || !commentText.trim()) return;
+    const comment = { id: Date.now(), name: 'Reviewer', text: commentText.trim(), time: 'Just now', done: false, ...(pendingPin ? { pin: pendingPin } : {}) };
     const next = { ...comments, [selected]: [...(comments[selected] || []), comment] };
     setComments(next);
     localStorage.setItem('coverdesk-comments-production', JSON.stringify(next));
     void fetch('/api/state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ comments: next }) });
     setCommentText('');
+    setPendingPin(null);
+  };
+  const setReviewStatus = async (status: ReviewStatus) => {
+    if (selected === null) return;
+    const nextDesigns = designs.map((cover, index) => index === selected ? { ...cover, status } : cover);
+    setDesigns(nextDesigns);
+    if (status !== 'Changes Needed') { setPendingPin(null); setCommentText(''); }
+    localStorage.setItem('coverdesk-designs-production', JSON.stringify(nextDesigns));
+    await fetch('/api/state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ designs: nextDesigns }) });
+  };
+  const placePin = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (active?.status !== 'Changes Needed') return;
+    if (didDrag.current) { didDrag.current = false; return; }
+    const bounds = event.currentTarget.getBoundingClientRect();
+    setPendingPin({ x: Math.max(0, Math.min(100, ((event.clientX - bounds.left) / bounds.width) * 100)), y: Math.max(0, Math.min(100, ((event.clientY - bounds.top) / bounds.height) * 100)) });
   };
   const deleteComment = async (commentId: number) => {
     if (selected === null || !window.confirm('Delete this comment?')) return;
@@ -231,45 +249,10 @@ export default function Home() {
     localStorage.setItem('coverdesk-comments-production', JSON.stringify(next));
     await fetch('/api/state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ comments: next }) });
   };
-  const approveCover = async (event: FormEvent) => {
-    event.preventDefault();
-    if (selected === null || !approvalDraft.client.trim() || !approvalDraft.date) return;
-    setApprovalSaving(true);
-    setApprovalSaved(false);
-    const nextDesigns = designs.map((cover, index) => index === selected ? {
-      ...cover,
-      status: 'Approved',
-      approval: {
-        designer: active?.approval?.designer || '',
-        client: approvalDraft.client.trim(),
-        date: approvalDraft.date,
-      },
-    } : cover);
-    setDesigns(nextDesigns);
-    localStorage.setItem('coverdesk-designs-production', JSON.stringify(nextDesigns));
-    const response = await fetch('/api/state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ designs: nextDesigns }) });
-    setApprovalSaving(false);
-    setApprovalSaved(response.ok);
-  };
-  const removeApproval = async () => {
-    if (selected === null || !window.confirm('Remove this approval and return the cover to Client review?')) return;
-    setApprovalSaving(true);
-    setApprovalSaved(false);
-    const nextDesigns = designs.map((cover, index) => {
-      if (index !== selected) return cover;
-      const { approval: _approval, ...coverWithoutApproval } = cover;
-      return { ...coverWithoutApproval, status: 'Client review' };
-    });
-    setDesigns(nextDesigns);
-    setApprovalDraft({ designer: '', client: '', date: '' });
-    localStorage.setItem('coverdesk-designs-production', JSON.stringify(nextDesigns));
-    await fetch('/api/state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ designs: nextDesigns }) });
-    setApprovalSaving(false);
-  };
   const renderCoverCard = (cover: Cover) => {
     const index = designs.indexOf(cover);
     const commentCount = (comments[index] || []).filter((comment) => !comment.done).length;
-    return <button key={`${cover.grade}-${cover.subject}`} onClick={() => setSelected(index)} className="group overflow-hidden rounded-[24px] border border-white/80 bg-white/70 text-left shadow-[0_12px_35px_rgba(30,34,24,.08),inset_0_1px_0_rgba(255,255,255,.9)] backdrop-blur-xl transition duration-300 hover:-translate-y-1.5 hover:shadow-[0_22px_50px_rgba(30,34,24,.14)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#d5ff3d]">
+    return <button key={cover.id || `${cover.grade}-${cover.subject}-${cover.version}`} onClick={() => setSelected(index)} className="group overflow-hidden rounded-[24px] border border-white/80 bg-white/70 text-left shadow-[0_12px_35px_rgba(30,34,24,.08),inset_0_1px_0_rgba(255,255,255,.9)] backdrop-blur-xl transition duration-300 hover:-translate-y-1.5 hover:shadow-[0_22px_50px_rgba(30,34,24,.14)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#d5ff3d]">
       <div className="aspect-video overflow-hidden bg-[#e8e8e3]"><CoverImage link={cover.image} alt={`${cover.grade} ${cover.subject} book cover`} className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.015]" /></div>
       <div className="p-4"><div className="mb-2 flex items-center justify-between gap-2"><span className="text-xs font-medium text-black/45">{cover.grade}</span><Badge className={statusClass[cover.status]}>{cover.status}</Badge></div><h3 className="text-lg font-semibold tracking-tight">{cover.subject}</h3><div className="mt-3 flex items-center justify-between border-t border-black/7 pt-3 text-xs text-black/45"><span>{cover.version}</span><span className="flex items-center gap-1.5"><span className={`flex items-center gap-1 rounded-full px-2 py-1 font-semibold text-white transition ${commentCount > 0 ? 'bg-red-500 shadow-[0_0_0_3px_rgba(239,68,68,.14),0_5px_14px_rgba(239,68,68,.25)]' : 'bg-[#1b2a21]'}`} aria-label={`${commentCount} comment notification${commentCount === 1 ? '' : 's'}`}><MessageCircle className="size-3" />{commentCount}</span><span className="hidden font-medium text-[#42604d] 2xl:inline">View <ChevronRight className="inline size-3.5" /></span></span></div></div>
     </button>;
@@ -286,7 +269,7 @@ export default function Home() {
       {mode === 'designer' && <div className="mx-auto max-w-[1600px] px-5 py-8 md:px-9 md:py-10">
         <div className="mb-7 flex flex-col gap-3 md:flex-row md:items-end md:justify-between"><div><p className="text-xs font-semibold uppercase tracking-[.18em] text-[#63766a]">Designer workspace</p><h1 className="mt-2 text-3xl font-semibold tracking-[-.04em] md:text-4xl">Build the cover documentation</h1><p className="mt-2 text-sm text-black/50">Create a cover, add the artwork and complete every description the client needs to review.</p></div><div className="flex items-center gap-3">{saved && <span className="flex items-center gap-1.5 text-sm font-medium text-emerald-700"><Check className="size-4" />Draft saved</span>}<Button variant="outline" onClick={newDesign}><Plus />New cover</Button><Button onClick={saveDesign} disabled={!canSave}><Save />Save design</Button></div></div>
         <div className="grid gap-5 xl:grid-cols-[230px_minmax(280px,.8fr)_minmax(380px,1.2fr)]">
-          <aside className="rounded-2xl border border-black/8 bg-white p-3 xl:sticky xl:top-24 xl:h-[calc(100vh-120px)] xl:overflow-y-auto"><div className="flex items-center justify-between px-2 pb-3 pt-1"><p className="text-xs font-semibold uppercase tracking-[.14em] text-black/40">Covers</p><Button onClick={newDesign} variant="ghost" size="icon-sm" aria-label="Create new cover"><Plus /></Button></div>{designs.length === 0 && <button onClick={newDesign} className="w-full rounded-xl border border-dashed border-black/10 px-3 py-8 text-center text-sm text-black/45"><Plus className="mx-auto mb-2 size-5" />Create your first cover</button>}{designs.map((cover, index) => <div key={`${cover.grade}-${cover.subject}`} className={`group mb-1 flex items-center rounded-xl transition ${editingIndex === index ? 'bg-[#eaf1e2]' : 'hover:bg-black/[.035]'}`}><button onClick={() => selectDesign(index)} className="flex min-w-0 flex-1 items-center gap-3 p-2.5 text-left"><CoverImage link={cover.image} alt="" className="h-14 w-10 shrink-0 rounded object-contain" /><div className="min-w-0"><p className="text-xs text-black/40">{cover.grade}</p><p className="truncate text-sm font-semibold">{cover.subject}</p><p className="mt-0.5 text-[10px] text-black/35">{cover.version} · {cover.status}</p></div></button><Button onClick={() => void deleteDesign(index)} variant="ghost" size="icon-sm" className="mr-1 shrink-0 text-black/35 opacity-70 hover:bg-red-50 hover:text-red-600 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100" aria-label={`Delete ${cover.grade} ${cover.subject}`}><Trash2 /></Button></div>)}</aside>
+          <aside className="rounded-2xl border border-black/8 bg-white p-3 xl:sticky xl:top-24 xl:h-[calc(100vh-120px)] xl:overflow-y-auto"><div className="flex items-center justify-between px-2 pb-3 pt-1"><p className="text-xs font-semibold uppercase tracking-[.14em] text-black/40">Covers</p><Button onClick={newDesign} variant="ghost" size="icon-sm" aria-label="Create new cover"><Plus /></Button></div>{designs.length === 0 && <button onClick={newDesign} className="w-full rounded-xl border border-dashed border-black/10 px-3 py-8 text-center text-sm text-black/45"><Plus className="mx-auto mb-2 size-5" />Create your first cover</button>}{designs.map((cover, index) => <div key={cover.id || `${cover.grade}-${cover.subject}-${cover.version}`} className={`group mb-1 flex items-center rounded-xl transition ${editingIndex === index ? 'bg-[#eaf1e2]' : 'hover:bg-black/[.035]'}`}><button onClick={() => selectDesign(index)} className="flex min-w-0 flex-1 items-center gap-3 p-2.5 text-left"><CoverImage link={cover.image} alt="" className="h-14 w-10 shrink-0 rounded object-contain" /><div className="min-w-0"><p className="text-xs text-black/40">{cover.grade}</p><p className="truncate text-sm font-semibold">{cover.subject}</p><p className="mt-0.5 text-[10px] text-black/35">{cover.version} · {cover.status}</p></div></button><Button onClick={() => void deleteDesign(index)} variant="ghost" size="icon-sm" className="mr-1 shrink-0 text-black/35 opacity-70 hover:bg-red-50 hover:text-red-600 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100" aria-label={`Delete ${cover.grade} ${cover.subject}`}><Trash2 /></Button></div>)}</aside>
 
           <section className="rounded-2xl border border-black/8 bg-[#202821] p-5 xl:sticky xl:top-24 xl:flex xl:h-[calc(100vh-120px)] xl:flex-col"><div className="mb-4 flex items-center justify-between text-white"><div><p className="text-xs text-white/45">Live cover preview</p><p className="mt-1 font-semibold">{draft.grade || 'New cover'}{draft.subject ? ` · ${draft.subject}` : ''}</p></div><Palette className="size-5 text-[#d8ef83]" /></div><div className="flex min-h-[400px] flex-1 items-center justify-center overflow-hidden rounded-xl bg-black/20 p-4">{draft.image ? <CoverImage link={draft.image} alt="Cover preview" className="max-h-full max-w-full rounded-md object-contain shadow-2xl" onStatusChange={setPreviewImageStatus} /> : <div className="text-center text-white/35"><Link2 className="mx-auto mb-3 size-8" /><p className="text-sm">Paste a Google Drive image link</p></div>}</div>{draft.image && <div className={`mt-3 flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold ${imageHasProblem ? 'bg-red-500/15 text-red-200' : previewImageStatus === 'loaded' ? 'bg-emerald-500/15 text-emerald-200' : 'bg-white/8 text-white/55'}`}>{imageHasProblem ? <AlertCircle className="size-4" /> : previewImageStatus === 'loaded' ? <Check className="size-4" /> : <Link2 className="size-4" />}{imageHasProblem ? 'Image is not available in the client review' : previewImageStatus === 'loaded' ? 'Image ready for client review' : 'Checking image link…'}</div>}<div className="mt-4 flex items-start gap-2 rounded-xl border border-white/10 bg-white/5 p-3 text-xs leading-5 text-white/55"><Link2 className="mt-0.5 size-4 shrink-0" />Use a direct JPG/PNG file link—not a folder link—and set access to “Anyone with the link.”</div></section>
 
@@ -330,8 +313,14 @@ export default function Home() {
         <div className="mx-auto grid h-full max-w-[1800px] overflow-hidden rounded-[24px] bg-white shadow-2xl lg:grid-cols-[minmax(0,4fr)_minmax(330px,1fr)]">
           <section onWheel={zoomWithWheel} onPointerDown={startPan} onPointerMove={movePan} onPointerUp={stopPan} onPointerCancel={stopPan} className={`relative flex min-h-0 touch-none items-center justify-center overflow-hidden bg-[#202821] p-5 md:p-10 ${zoom > 1 ? dragging ? 'cursor-grabbing' : 'cursor-grab' : ''}`}>
             <div className="absolute left-5 top-5 z-10 flex items-center gap-2 rounded-full bg-black/25 px-3 py-1.5 text-xs text-white/75 backdrop-blur-md"><FileText className="size-3.5" />{active.grade} · {active.subject}</div>
-            <div className={`flex h-full w-full select-none items-center justify-center ease-out ${dragging ? '' : 'transition-transform duration-150'}`} style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}><CoverImage link={active.image} alt={`${active.grade} ${active.subject} full cover`} className="pointer-events-none max-h-full max-w-full rounded-lg object-contain shadow-[0_30px_80px_rgba(0,0,0,.38)]" /></div>
-            <div className="pointer-events-none absolute right-5 top-5 z-10 rounded-full bg-black/25 px-3 py-1.5 text-xs text-white/65 backdrop-blur-md">Scroll to zoom{zoom > 1 ? ' · Drag to move' : ''}</div>
+            <div className={`flex h-full w-full select-none items-center justify-center ease-out ${dragging ? '' : 'transition-transform duration-150'}`} style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
+              <div onClick={placePin} className={`relative inline-grid max-h-full max-w-full ${active.status === 'Changes Needed' ? 'cursor-crosshair' : ''}`}>
+                <CoverImage link={active.image} alt={`${active.grade} ${active.subject} full cover`} className="pointer-events-none col-start-1 row-start-1 block max-h-full max-w-full rounded-lg object-contain shadow-[0_30px_80px_rgba(0,0,0,.38)]" />
+                {activeComments.filter((comment) => comment.pin).map((comment, pinIndex) => <button key={comment.id} type="button" onClick={(event) => event.stopPropagation()} title={comment.text} aria-label={`Pinned comment ${pinIndex + 1}: ${comment.text}`} className="absolute z-20 grid size-7 -translate-x-1/2 -translate-y-full place-items-center rounded-full bg-red-500 text-xs font-bold text-white shadow-[0_5px_18px_rgba(239,68,68,.55)] ring-2 ring-white" style={{ left: `${comment.pin!.x}%`, top: `${comment.pin!.y}%` }}>{pinIndex + 1}</button>)}
+                {pendingPin && <span className="pointer-events-none absolute z-20 grid size-8 -translate-x-1/2 -translate-y-full place-items-center rounded-full bg-[#d8ff3e] text-xs font-bold text-[#172019] shadow-[0_5px_20px_rgba(216,255,62,.45)] ring-2 ring-white" style={{ left: `${pendingPin.x}%`, top: `${pendingPin.y}%` }}><MapPin className="size-4" /></span>}
+              </div>
+            </div>
+            <div className="pointer-events-none absolute right-5 top-5 z-10 rounded-full bg-black/25 px-3 py-1.5 text-xs text-white/65 backdrop-blur-md">{active.status === 'Changes Needed' ? 'Click image to place a feedback pin' : 'Scroll to zoom'}{zoom > 1 ? ' · Drag to move' : ''}</div>
             <div className="absolute bottom-5 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full border border-white/10 bg-black/35 p-1 text-white shadow-lg backdrop-blur-md">
               <Button onClick={() => changeZoom(-0.2)} disabled={zoom <= 1} variant="ghost" size="icon-sm" className="rounded-full text-white hover:bg-white/15 hover:text-white" aria-label="Zoom out"><ZoomOut /></Button>
               <button onClick={() => setZoom(1)} className="min-w-14 rounded-full px-2 py-1 text-xs font-semibold hover:bg-white/10" aria-label="Reset zoom">{Math.round(zoom * 100)}%</button>
@@ -344,8 +333,8 @@ export default function Home() {
 
           <aside className="min-h-0 overflow-y-auto border-l border-black/8 bg-[#fbfbf8]">
             <div className="sticky top-0 z-10 flex items-center justify-between border-b border-black/8 bg-[#fbfbf8]/95 px-6 py-4 backdrop-blur"><div className="flex gap-2"><Badge className={statusClass[active.status]}>{active.status}</Badge><Badge variant="outline">{active.version}</Badge></div><Button onClick={() => setSelected(null)} variant="ghost" size="icon" aria-label="Close documentation"><X /></Button></div>
-            <div className="p-6 md:p-7">
-              <p className="text-xs font-semibold uppercase tracking-[.17em] text-[#66796d]">{active.grade}</p><h2 className="mt-2 text-3xl font-semibold tracking-[-.035em]">{active.subject}</h2>
+            <div className="flex flex-col p-6 md:p-7">
+              <div className="order-first"><p className="text-xs font-semibold uppercase tracking-[.17em] text-[#66796d]">{active.grade}</p><h2 className="mt-2 text-3xl font-semibold tracking-[-.035em]">{active.subject}</h2></div>
               {(active.concept?.trim() || active.inspiration?.trim() || active.details?.illustration?.trim()) && <section className="mt-8"><h3 className="text-base font-semibold">Design Concept</h3>{active.concept?.trim() && <p className="mt-3 whitespace-pre-line text-sm leading-6 text-black/60">{active.concept}</p>}{active.inspiration?.trim() && <div className="mt-5 rounded-xl bg-[#f0f3ed] p-4"><p className="text-xs font-semibold uppercase tracking-[.12em] text-[#63766a]">Theme and inspiration</p><p className="mt-2 whitespace-pre-line text-sm leading-6 text-black/60">{active.inspiration}</p></div>}{active.details?.illustration?.trim() && <div className="mt-4 rounded-xl bg-[#f0f3ed] p-4"><p className="text-xs font-semibold uppercase tracking-[.12em] text-[#63766a]">Illustration system</p><p className="mt-2 whitespace-pre-line text-sm leading-6 text-black/60">{active.details.illustration}</p></div>}</section>}
               <section className="mt-8 border-t border-black/8 pt-7"><h3 className="text-base font-semibold">Colour Palette</h3><div className="mt-4 space-y-3">{active.palette.map((colour) => <div key={colour.hex} className="flex items-center gap-3"><span className="size-9 rounded-lg border border-black/8" style={{ backgroundColor: colour.hex }} /><div><p className="text-sm font-medium">{colour.name}</p><p className="font-mono text-xs text-black/45">{colour.hex}</p></div></div>)}</div></section>
               {documentation.map((section, sectionIndex) => {
@@ -353,25 +342,21 @@ export default function Home() {
                 if (!detail?.trim()) return null;
                 return <section key={section.title} className="mt-8 border-t border-black/8 pt-7"><div className="flex items-baseline gap-3"><span className="text-xs font-semibold text-[#718278]">0{sectionIndex + 1}</span><h3 className="text-base font-semibold">{section.title}</h3></div><p className="mt-4 whitespace-pre-line rounded-xl bg-[#f0f3ed] p-4 text-sm leading-6 text-black/62">{detail}</p></section>;
               })}
-              <form onSubmit={approveCover} className={`mt-9 rounded-2xl border p-5 transition ${active.approval ? 'border-emerald-200 bg-emerald-50/75' : 'border-black/7 bg-[#eef3e9]'}`}>
-                <div className="flex items-center justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-[.14em] text-[#5f7466]">Approval</p><p className="mt-1 text-xs leading-5 text-black/45">Client name and approval date are required.</p></div>{active.approval && <span className="inline-flex items-center gap-1 rounded-full bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white"><Check className="size-3.5" />Approved</span>}</div>
-                <label className="mt-4 block text-xs font-semibold text-black/60" htmlFor="approval-client">Client name</label>
-                <Input id="approval-client" value={approvalDraft.client} onChange={(event) => { setApprovalSaved(false); setApprovalDraft({ ...approvalDraft, client: event.target.value }); }} className="mt-2 bg-white/85" placeholder="Enter client name" required />
-                <label className="mt-4 block text-xs font-semibold text-black/60" htmlFor="approval-date">Approval date</label>
-                <Input id="approval-date" type="date" value={approvalDraft.date} onChange={(event) => { setApprovalSaved(false); setApprovalDraft({ ...approvalDraft, date: event.target.value }); }} className="mt-2 bg-white/85" required />
-                <Button type="submit" disabled={approvalSaving || !approvalDraft.client.trim() || !approvalDraft.date} className="mt-4 w-full bg-emerald-700 text-white hover:bg-emerald-800"><Check />{approvalSaving ? 'Saving approval…' : active.approval ? 'Update approval' : 'Approve cover'}</Button>
-                {active.approval && <Button type="button" onClick={removeApproval} disabled={approvalSaving} variant="ghost" className="mt-2 w-full text-red-600 hover:bg-red-50 hover:text-red-700"><Trash2 />Remove approval</Button>}
-                {approvalSaved && <p className="mt-3 flex items-center justify-center gap-1.5 text-xs font-semibold text-emerald-700"><Check className="size-4" />Approval saved and cover status updated.</p>}
-              </form>
-              <section className="mt-9 border-t border-black/8 pt-8">
-                <div className="flex items-center justify-between"><div><p className="text-xs font-semibold uppercase tracking-[.14em] text-[#66796d]">Discussion</p><h3 className="mt-1 text-lg font-semibold">Comments</h3></div><span className="grid size-9 place-items-center rounded-full bg-[#1b2a21] text-sm font-semibold text-white">{selected !== null ? (comments[selected]?.length || 0) : 0}</span></div>
-                <div className="mt-5 space-y-4">{(selected !== null ? (comments[selected] || []) : []).map((comment: Comment) => <article key={comment.id} className={`group min-w-0 overflow-hidden rounded-2xl border p-4 transition ${comment.done ? 'border-emerald-200 bg-emerald-50/70' : 'border-black/7 bg-white'}`}><div className="flex items-center justify-between gap-3"><div className="flex min-w-0 items-center gap-2"><span className={`grid size-7 shrink-0 place-items-center rounded-full text-xs font-bold ${comment.done ? 'bg-emerald-500 text-white' : 'bg-[#dce9cf] text-[#334d3c]'}`}>{comment.done ? <Check className="size-4" /> : comment.name.charAt(0).toUpperCase()}</span><p className="truncate text-sm font-semibold">{comment.name}</p></div><div className="flex shrink-0 items-center gap-1"><time className="text-[10px] text-black/35">{comment.time}</time><Button onClick={() => void deleteComment(comment.id)} variant="ghost" size="icon-sm" className="text-black/30 hover:bg-red-50 hover:text-red-600 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100" aria-label={`Delete comment by ${comment.name}`}><Trash2 /></Button></div></div><p className={`mt-3 break-words text-sm leading-5 [overflow-wrap:anywhere] ${comment.done ? 'text-black/45 line-through decoration-black/20' : 'text-black/60'}`}>{comment.text}</p><Button onClick={() => void toggleCommentDone(comment.id)} variant={comment.done ? 'outline' : 'default'} size="sm" className={`mt-4 ${comment.done ? 'border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}><Check />{comment.done ? 'Done · Reopen' : 'Mark done'}</Button></article>)}</div>
-                <form onSubmit={submitComment} className="mt-5 rounded-2xl border border-black/8 bg-white p-4">
-                  <label htmlFor="comment-name" className="text-xs font-semibold text-black/65">Your name</label><Input id="comment-name" value={commenterName} onChange={(event) => setCommenterName(event.target.value)} className="mt-2" placeholder="Enter your name first" required />
-                  <label htmlFor="comment-text" className="mt-4 block text-xs font-semibold text-black/65">Comment</label><Textarea id="comment-text" value={commentText} onChange={(event) => setCommentText(event.target.value)} disabled={!commenterName.trim()} className="mt-2 min-h-24 resize-none" placeholder={commenterName.trim() ? 'Write your feedback…' : 'Enter your name to enable comments'} required />
-                  <Button type="submit" disabled={!commenterName.trim() || !commentText.trim()} className="mt-3 w-full"><Send />Post comment</Button>
-                </form>
+              <section className="order-first mt-7 rounded-2xl border border-black/8 bg-[#eef3e9] p-5">
+                <p className="text-xs font-semibold uppercase tracking-[.14em] text-[#5f7466]">Review status</p>
+                <p className="mt-1 text-xs leading-5 text-black/45">Choose the decision for this cover.</p>
+                <div className="mt-4 grid grid-cols-2 gap-2">{reviewStatuses.map((status) => <button key={status} type="button" onClick={() => void setReviewStatus(status)} aria-pressed={active.status === status} className={`min-h-11 rounded-xl border px-3 py-2 text-left text-sm font-semibold transition ${active.status === status ? 'border-[#273529] bg-[#1b2a21] text-white shadow-md' : 'border-black/8 bg-white/85 text-black/65 hover:border-black/20 hover:bg-white'}`}>{status}</button>)}</div>
               </section>
+              {active.status === 'Changes Needed' && <section className="order-first mt-7 border-t border-black/8 pt-7">
+                <div className="flex items-center justify-between"><div><p className="text-xs font-semibold uppercase tracking-[.14em] text-[#66796d]">Feedback</p><h3 className="mt-1 text-lg font-semibold">Comments</h3></div><span className="grid size-9 place-items-center rounded-full bg-red-500 text-sm font-semibold text-white">{activeComments.length}</span></div>
+                <p className="mt-3 flex items-start gap-2 rounded-xl bg-red-50 px-3 py-2.5 text-xs leading-5 text-red-700"><MapPin className="mt-0.5 size-4 shrink-0" />Click the cover image to attach your next comment to a precise area.</p>
+                <div className="mt-5 space-y-4">{activeComments.map((comment: Comment, commentIndex) => <article key={comment.id} className={`group min-w-0 overflow-hidden rounded-2xl border p-4 transition ${comment.done ? 'border-emerald-200 bg-emerald-50/70' : 'border-black/7 bg-white'}`}><div className="flex items-center justify-between gap-3"><div className="flex min-w-0 items-center gap-2"><span className={`grid size-7 shrink-0 place-items-center rounded-full text-xs font-bold ${comment.done ? 'bg-emerald-500 text-white' : comment.pin ? 'bg-red-500 text-white' : 'bg-[#dce9cf] text-[#334d3c]'}`}>{comment.done ? <Check className="size-4" /> : comment.pin ? activeComments.filter((item) => item.pin).findIndex((item) => item.id === comment.id) + 1 : <MessageCircle className="size-3.5" />}</span><p className="truncate text-sm font-semibold">{comment.pin ? 'Pinned feedback' : 'General feedback'}</p></div><div className="flex shrink-0 items-center gap-1"><time className="text-[10px] text-black/35">{comment.time}</time><Button onClick={() => void deleteComment(comment.id)} variant="ghost" size="icon-sm" className="text-black/30 hover:bg-red-50 hover:text-red-600 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100" aria-label={`Delete comment ${commentIndex + 1}`}><Trash2 /></Button></div></div><p className={`mt-3 break-words text-sm leading-5 [overflow-wrap:anywhere] ${comment.done ? 'text-black/45 line-through decoration-black/20' : 'text-black/60'}`}>{comment.text}</p><Button onClick={() => void toggleCommentDone(comment.id)} variant={comment.done ? 'outline' : 'default'} size="sm" className={`mt-4 ${comment.done ? 'border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}><Check />{comment.done ? 'Done · Reopen' : 'Mark done'}</Button></article>)}</div>
+                <form onSubmit={submitComment} className="mt-5 rounded-2xl border border-black/8 bg-white p-4">
+                  {pendingPin && <div className="mb-3 flex items-center justify-between rounded-xl bg-[#efffc2] px-3 py-2 text-xs font-semibold text-[#304018]"><span className="flex items-center gap-2"><MapPin className="size-4" />Pin selected</span><button type="button" onClick={() => setPendingPin(null)} className="rounded-md px-2 py-1 hover:bg-black/5">Remove</button></div>}
+                  <label htmlFor="comment-text" className="block text-xs font-semibold text-black/65">Comment</label><Textarea id="comment-text" value={commentText} onChange={(event) => setCommentText(event.target.value)} className="mt-2 min-h-24 resize-none" placeholder="Write what needs to change…" required />
+                  <Button type="submit" disabled={!commentText.trim()} className="mt-3 w-full"><Send />Post feedback</Button>
+                </form>
+              </section>}
             </div>
           </aside>
         </div>
