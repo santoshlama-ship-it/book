@@ -61,7 +61,7 @@ const statusClass: Record<string, string> = {
   Redo: 'bg-rose-50 text-rose-700',
   'On Hold': 'bg-slate-100 text-slate-700',
 };
-const reviewStatuses = ['Approved', 'Changes Needed', 'Redo', 'On Hold'] as const;
+const reviewStatuses = ['Ready for Review', 'Approved', 'Changes Needed', 'Redo', 'On Hold'] as const;
 type ReviewStatus = (typeof reviewStatuses)[number];
 
 function driveFileId(link: string) {
