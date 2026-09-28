@@ -1,0 +1,3 @@
+import { clearAccess, grantAccess, passwordIsValid, sameOrigin } from '@/lib/access';
+export async function POST(request: Request) { if (!sameOrigin(request)) return Response.json({ error: 'Invalid request.' }, { status: 403 }); const body = await request.json().catch(() => ({})) as { password?: string }; if (!passwordIsValid(String(body.password || ''))) return Response.json({ error: 'Incorrect password.' }, { status: 401 }); await grantAccess(); return Response.json({ ok: true }); }
+export async function DELETE(request: Request) { if (!sameOrigin(request)) return Response.json({ error: 'Invalid request.' }, { status: 403 }); await clearAccess(); return Response.json({ ok: true }); }

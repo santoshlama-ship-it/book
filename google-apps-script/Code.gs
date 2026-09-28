@@ -45,6 +45,21 @@ function asDate_(value) {
   return String(value).slice(0, 10);
 }
 
+function matchKey_(grade, subject, version) {
+  return [grade, subject, version || 'V1'].map(value => String(value || '').trim().toLowerCase()).join('|');
+}
+
+function noteLines_(value) {
+  return String(value || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+}
+
+function noteCommentId_(key, text) {
+  const value = `${key}|${text}`;
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) hash = ((hash << 5) - hash + value.charCodeAt(index)) | 0;
+  return Math.abs(hash) || 1;
+}
+
 function sheet_(name) {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   return spreadsheet.getSheetByName(name) || spreadsheet.insertSheet(name);
@@ -104,6 +119,35 @@ function readState_() {
     });
     return result;
   }, {});
+
+  const positionByMatch = designs.reduce((map, cover, index) => {
+    map[matchKey_(cover.grade, cover.subject, cover.version)] = index;
+    return map;
+  }, {});
+  const addSheetNote = (coverPosition, note) => {
+    if (coverPosition === undefined || !note) return;
+    const items = comments[coverPosition] ||= [];
+    if (items.some(comment => String(comment.text || '').trim().toLowerCase() === note.toLowerCase())) return;
+    const cover = designs[coverPosition];
+    items.push({
+      id: noteCommentId_(matchKey_(cover.grade, cover.subject, cover.version), note),
+      name: 'Sheet note', text: note, time: 'From Google Sheets', done: false
+    });
+  };
+
+  covers.forEach((row, index) => noteLines_(row.Notes).forEach(note => addSheetNote(index, note)));
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  [...new Set(designs.map(cover => cover.subject).filter(Boolean))].forEach(subject => {
+    const subjectSheet = spreadsheet.getSheetByName(String(subject).slice(0, 100).replace(/[\\/?*\[\]:]/g, '-'));
+    if (!subjectSheet) return;
+    rowsByHeader_(subjectSheet, 1, COVER_HEADERS).forEach(row => {
+      const position = positionByMatch[matchKey_(row.Grade, row.Subject || subject, row.Version)];
+      noteLines_(row.Notes).forEach(note => addSheetNote(position, note));
+    });
+  });
+  designs.forEach((cover, index) => {
+    if ((comments[index] || []).length) cover.status = 'Changes Needed';
+  });
   return { designs, comments };
 }
 
@@ -117,11 +161,11 @@ function writeTable_(sheet, headerRow, headers, rows) {
   sheet.getRange(headerRow, 1, Math.max(rows.length + 1, 1), headers.length).setWrap(true).setVerticalAlignment('top');
 }
 
-function coverRows_(designs) {
-  return designs.map(cover => [
+function coverRows_(designs, comments) {
+  return designs.map((cover, position) => [
     cover.grade || '', cover.subject || '', cover.version || 'V1', cover.image || '',
     cover.concept || '', cover.details?.consistency || '', normaliseStatus_(cover.status),
-    cover.details?.approval || '', cover.approval?.client || '', cover.approval?.date || '',
+    comments && comments[position] ? comments[position].map(comment => comment.text).filter(Boolean).join('\n') : cover.details?.approval || '', cover.approval?.client || '', cover.approval?.date || '',
     cover.id || Utilities.getUuid(), cover.inspiration || '', cover.details?.typography || '',
     cover.details?.illustration || '', cover.details?.specifications || '',
     cover.details?.delivered || '', cover.details?.usage || ''
@@ -158,7 +202,10 @@ function refreshSubjectTabs_(designs) {
 function writeState_(state) {
   const designs = Array.isArray(state.designs) ? state.designs : [];
   const comments = state.comments && typeof state.comments === 'object' ? state.comments : {};
-  const allRows = coverRows_(designs);
+  designs.forEach((cover, position) => {
+    if ((comments[position] || []).length) cover.status = 'Changes Needed';
+  });
+  const allRows = coverRows_(designs, comments);
   writeTable_(sheet_(ALL_COVERS), 2, COVER_HEADERS, allRows);
 
   const commentRows = [];

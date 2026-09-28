@@ -1,5 +1,6 @@
 import { ensureDatabaseTables, getDatabase } from '@/lib/db';
 import { isGoogleSheetSyncConfigured, readGoogleSheetState, writeGoogleSheetState, type SyncedState } from '@/lib/google-sheet-sync';
+import { hasAccess, sameOrigin } from '@/lib/access';
 
 export const runtime = 'nodejs';
 
@@ -61,7 +62,30 @@ async function replaceComments(comments: Record<string, Comment[]>) {
     for (const comment of items) {
       await sql`INSERT INTO coverdesk_comments (cover_position, cover_id, id, name, body, display_time, done, pin_x, pin_y) VALUES (${Number(coverPosition)}, ${coverIds.get(Number(coverPosition)) || null}, ${comment.id}, ${comment.name || 'Reviewer'}, ${comment.text}, ${comment.time}, ${Boolean(comment.done)}, ${comment.pin?.x ?? null}, ${comment.pin?.y ?? null})`;
     }
+    if (items.length) await sql`UPDATE coverdesk_covers SET status = 'Changes Needed', updated_at = NOW() WHERE position = ${Number(coverPosition)}`;
   }
+}
+
+function applyCommentStatuses(state: SyncedState): SyncedState {
+  const comments = Object.fromEntries(Object.entries(state.comments).map(([position, items]) => [position, [...items]]));
+  const noteId = (key: string, text: string) => {
+    let hash = 0;
+    for (const character of `${key}|${text}`) hash = ((hash << 5) - hash + character.charCodeAt(0)) | 0;
+    return Math.abs(hash) || 1;
+  };
+  state.designs.forEach((cover, position) => {
+    const note = typeof cover.details?.approval === 'string' ? cover.details.approval : '';
+    const items = comments[String(position)] ||= [];
+    note.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).forEach((text) => {
+      if (items.some((comment) => comment.text.trim().toLowerCase() === text.toLowerCase())) return;
+      items.push({ id: noteId(`${cover.grade}|${cover.subject}|${cover.version}`, text), name: 'Sheet note', text, time: 'From Google Sheets', done: false });
+    });
+  });
+  return {
+    ...state,
+    comments,
+    designs: state.designs.map((cover, position) => (comments[String(position)] || []).length ? { ...cover, status: 'Changes Needed' } : cover),
+  };
 }
 
 async function migrateLegacyStateOnce() {
@@ -105,6 +129,7 @@ async function readDatabaseState(): Promise<SyncedState> {
 }
 
 export async function GET() {
+  if (!await hasAccess()) return Response.json({ error: 'Password required' }, { status: 401 });
   try {
     await prepareDatabase();
     let sheetSync: 'connected' | 'not-configured' | 'unavailable' = isGoogleSheetSyncConfigured() ? 'connected' : 'not-configured';
@@ -112,8 +137,9 @@ export async function GET() {
       try {
         const sheetState = await readGoogleSheetState();
         if (sheetState) {
-          await replaceDesigns(sheetState.designs, false);
-          await replaceComments(sheetState.comments);
+          const syncedState = applyCommentStatuses(sheetState);
+          await replaceDesigns(syncedState.designs, false);
+          await replaceComments(syncedState.comments);
         }
       } catch (error) {
         sheetSync = 'unavailable';
@@ -129,6 +155,8 @@ export async function GET() {
 }
 
 export async function PUT(request: Request) {
+  if (!sameOrigin(request)) return Response.json({ error: 'Invalid request' }, { status: 403 });
+  if (!await hasAccess()) return Response.json({ error: 'Password required' }, { status: 401 });
   try {
     const body = await request.json() as { designs?: Cover[]; comments?: Record<string, Comment[]> };
     await prepareDatabase();
