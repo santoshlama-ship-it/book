@@ -129,7 +129,7 @@ async function readDatabaseState(): Promise<SyncedState> {
 }
 
 export async function GET() {
-  if (!await hasAccess()) return Response.json({ error: 'Password required' }, { status: 401 });
+  if (!await hasAccess('covers')) return Response.json({ error: 'Cover review password required' }, { status: 401 });
   try {
     await prepareDatabase();
     let sheetSync: 'connected' | 'not-configured' | 'unavailable' = isGoogleSheetSyncConfigured() ? 'connected' : 'not-configured';
@@ -156,7 +156,7 @@ export async function GET() {
 
 export async function PUT(request: Request) {
   if (!sameOrigin(request)) return Response.json({ error: 'Invalid request' }, { status: 403 });
-  if (!await hasAccess()) return Response.json({ error: 'Password required' }, { status: 401 });
+  if (!await hasAccess('covers')) return Response.json({ error: 'Cover review password required' }, { status: 401 });
   try {
     const body = await request.json() as { designs?: Cover[]; comments?: Record<string, Comment[]> };
     await prepareDatabase();

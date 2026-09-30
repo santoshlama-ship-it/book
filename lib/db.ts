@@ -23,6 +23,14 @@ export async function ensureDatabaseTables() {
   await sql`CREATE TABLE IF NOT EXISTS coverdesk_comments (cover_position INTEGER NOT NULL, id BIGINT NOT NULL, name TEXT NOT NULL, body TEXT NOT NULL, display_time TEXT NOT NULL, done BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY (cover_position, id))`;
   await sql`CREATE TABLE IF NOT EXISTS coverdesk_approval_history (id BIGSERIAL PRIMARY KEY, cover_position INTEGER NOT NULL, grade TEXT NOT NULL, subject TEXT NOT NULL, action TEXT NOT NULL, client_name TEXT, approval_date DATE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`;
   await sql`CREATE TABLE IF NOT EXISTS coverdesk_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`;
+  await sql`CREATE TABLE IF NOT EXISTS bookdesk_books (position INTEGER PRIMARY KEY, book_id TEXT UNIQUE NOT NULL, title TEXT NOT NULL, grade TEXT NOT NULL, subject TEXT NOT NULL, version TEXT NOT NULL, status TEXT NOT NULL, pdf_url TEXT NOT NULL DEFAULT '', page_count INTEGER NOT NULL DEFAULT 1, annotations JSONB NOT NULL DEFAULT '{}'::jsonb, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`;
+  await sql`ALTER TABLE bookdesk_books ADD COLUMN IF NOT EXISTS cover_id TEXT NOT NULL DEFAULT ''`;
+  await sql`ALTER TABLE bookdesk_books ADD COLUMN IF NOT EXISTS uploader TEXT NOT NULL DEFAULT ''`;
+  await sql`ALTER TABLE bookdesk_books ADD COLUMN IF NOT EXISTS qc JSONB NOT NULL DEFAULT '[]'::jsonb`;
+  await sql`ALTER TABLE bookdesk_books ADD COLUMN IF NOT EXISTS annotations JSONB NOT NULL DEFAULT '{}'::jsonb`;
+  await sql`CREATE TABLE IF NOT EXISTS bookdesk_comments (book_id TEXT NOT NULL, id BIGINT NOT NULL, page_number INTEGER NOT NULL DEFAULT 1, body TEXT NOT NULL, display_time TEXT NOT NULL, done BOOLEAN NOT NULL DEFAULT FALSE, pin_x DOUBLE PRECISION, pin_y DOUBLE PRECISION, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY (book_id, id))`;
+  await sql`ALTER TABLE bookdesk_comments ADD COLUMN IF NOT EXISTS pin_x DOUBLE PRECISION`;
+  await sql`ALTER TABLE bookdesk_comments ADD COLUMN IF NOT EXISTS pin_y DOUBLE PRECISION`;
   await sql`ALTER TABLE coverdesk_covers ADD COLUMN IF NOT EXISTS cover_id TEXT`;
   await sql`UPDATE coverdesk_covers SET cover_id = 'legacy-' || position WHERE cover_id IS NULL`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS coverdesk_covers_cover_id_idx ON coverdesk_covers (cover_id)`;
