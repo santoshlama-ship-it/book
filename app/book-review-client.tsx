@@ -12,11 +12,16 @@ import {
 import {
   BookOpen,
   Check,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Eraser,
+  Eye,
+  EyeOff,
   FileText,
   Lock,
+  CloudOff,
+  RefreshCw,
   MapPin,
   Maximize,
   Minimize,
@@ -24,6 +29,10 @@ import {
   ZoomOut,
   MessageCircle,
   Pencil,
+  Highlighter,
+  Square,
+  Undo2,
+  Redo2,
   Plus,
   Save,
   Send,
@@ -36,9 +45,23 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import PdfPage from './pdf-page';
 import { parsePdfLink } from '@/lib/pdf-link';
-import { QC_LEVELS, emptyQc, getQc, reviewQc, type QcReview } from '@/lib/book-qc';
+import {
+  QC_LEVELS,
+  emptyQc,
+  getQc,
+  reviewQc,
+  type QcReview,
+} from '@/lib/book-qc';
 
 type Point = { x: number; y: number };
+type AnnotationMark = {
+  id: string;
+  tool: 'pen' | 'highlight' | 'rectangle';
+  points: Point[];
+  color: string;
+  width: number;
+};
+type Annotation = Point[] | AnnotationMark;
 type Book = {
   id: string;
   title: string;
@@ -50,7 +73,7 @@ type Book = {
   coverId?: string;
   uploader?: string;
   pageCount: number;
-  annotations?: Record<string, Point[][]>;
+  annotations?: Record<string, Annotation[]>;
   qc?: QcReview[];
 };
 type BookComment = {
@@ -100,7 +123,25 @@ function driveImageUrl(link: string) {
   return match ? `https://lh3.googleusercontent.com/d/${match[1]}=w1600` : link;
 }
 
-function ApprovedCoverImage({ cover, contain = false }: { cover: ApprovedCover; contain?: boolean }) {
+function normaliseMark(annotation: Annotation, index: number): AnnotationMark {
+  if (Array.isArray(annotation))
+    return {
+      id: `legacy-${index}`,
+      tool: 'pen',
+      points: annotation,
+      color: '#ef4444',
+      width: 2,
+    };
+  return annotation;
+}
+
+function ApprovedCoverImage({
+  cover,
+  contain = false,
+}: {
+  cover: ApprovedCover;
+  contain?: boolean;
+}) {
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [cover.image]);
   if (!cover.image || failed)
@@ -123,7 +164,6 @@ function ApprovedCoverImage({ cover, contain = false }: { cover: ApprovedCover; 
   );
 }
 
-
 export default function BookReviewClient() {
   const [books, setBooks] = useState<Book[]>([]);
   const [comments, setComments] = useState<Record<string, BookComment[]>>({});
@@ -138,17 +178,34 @@ export default function BookReviewClient() {
   const saveQueue = useRef(Promise.resolve(true));
   const [comment, setComment] = useState('');
   const [drawing, setDrawing] = useState(false);
+  const [annotationTool, setAnnotationTool] = useState<
+    'pen' | 'highlight' | 'rectangle' | 'eraser'
+  >('pen');
+  const [annotationColor, setAnnotationColor] = useState('#ef4444');
+  const [annotationWidth, setAnnotationWidth] = useState(2);
+  const [showAnnotations, setShowAnnotations] = useState(true);
+  const [redoMarks, setRedoMarks] = useState<Record<string, Annotation[]>>({});
   const [pinning, setPinning] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [zoom, setZoom] = useState(100);
   const [commentPanel, setCommentPanel] = useState(false);
   const viewerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const sync = () => setFullscreen(Boolean(viewerRef.current && document.fullscreenElement === viewerRef.current));
-    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setFullscreen(false); };
+    const sync = () =>
+      setFullscreen(
+        Boolean(
+          viewerRef.current && document.fullscreenElement === viewerRef.current,
+        ),
+      );
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setFullscreen(false);
+    };
     document.addEventListener('fullscreenchange', sync);
     document.addEventListener('keydown', escape);
-    return () => { document.removeEventListener('fullscreenchange', sync); document.removeEventListener('keydown', escape); };
+    return () => {
+      document.removeEventListener('fullscreenchange', sync);
+      document.removeEventListener('keydown', escape);
+    };
   }, []);
   const toggleFullscreen = async () => {
     if (fullscreen) {
@@ -156,20 +213,35 @@ export default function BookReviewClient() {
       setFullscreen(false);
     } else {
       setFullscreen(true);
-      try { await viewerRef.current?.requestFullscreen(); } catch { /* Use the expanded in-page view if unsupported. */ }
+      try {
+        await viewerRef.current?.requestFullscreen();
+      } catch {
+        /* Use the expanded in-page view if unsupported. */
+      }
     }
   };
   const [currentStroke, setCurrentStroke] = useState<Point[]>([]);
   const [pendingPin, setPendingPin] = useState<Point | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [saveState, setSaveState] = useState<
+    'saved' | 'saving' | 'offline' | 'error'
+  >('saved');
   const [qcSaving, setQcSaving] = useState(false);
   const [reviewer, setReviewer] = useState('');
   const [qcNote, setQcNote] = useState('');
   const [error, setError] = useState('');
   const active = books.find((book) => book.id === selected) || null;
-  const coverForBook = (book: Book) => approvedCovers.find(cover => cover.id === book.coverId)
-    || (!book.coverId ? approvedCovers.find(cover => cover.grade === book.grade && cover.subject === book.subject && cover.version === book.version) : undefined);
+  const coverForBook = (book: Book) =>
+    approvedCovers.find((cover) => cover.id === book.coverId) ||
+    (!book.coverId
+      ? approvedCovers.find(
+          (cover) =>
+            cover.grade === book.grade &&
+            cover.subject === book.subject &&
+            cover.version === book.version,
+        )
+      : undefined);
   const activeCover = active ? coverForBook(active) : undefined;
   const activeComments = active ? comments[active.id] || [] : [];
   const unresolved = (book: Book) =>
@@ -205,27 +277,85 @@ export default function BookReviewClient() {
     })();
   }, []);
   const save = (nextBooks = books, nextComments = comments) => {
-    const operation = saveQueue.current.then(async () => {
-    try {
-    const response = await fetch('/api/books', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ books: nextBooks, comments: nextComments }),
+    const snapshot = JSON.stringify({
+      books: nextBooks,
+      comments: nextComments,
     });
-    if (!response.ok) {
-      const data = await response.json().catch(() => null) as { error?: string } | null;
-      setError(response.status === 401
-        ? 'Your session expired. Unlock the book workspace again to save.'
-        : data?.error || 'Unable to save. Please try again.');
+    localStorage.setItem('bookdesk-pending-save', snapshot);
+    setSaveState(navigator.onLine ? 'saving' : 'offline');
+    const operation = saveQueue.current.then(async () => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          if (!navigator.onLine) {
+            setSaveState('offline');
+            return false;
+          }
+          const response = await fetch('/api/books', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: snapshot,
+          });
+          if (!response.ok) {
+            const data = (await response.json().catch(() => null)) as {
+              error?: string;
+            } | null;
+            if (response.status < 500) {
+              setError(
+                response.status === 401
+                  ? 'Your session expired. Unlock the book workspace again to save.'
+                  : data?.error || 'Unable to save.',
+              );
+              setSaveState('error');
+              return false;
+            }
+            throw new Error(data?.error || 'Server save failed');
+          }
+          localStorage.removeItem('bookdesk-pending-save');
+          setError('');
+          setSaveState('saved');
+          return true;
+        } catch {
+          if (attempt < 2)
+            await new Promise((resolve) =>
+              setTimeout(resolve, 500 * (attempt + 1)),
+            );
+        }
+      }
+      setError(
+        'Unable to save. Your changes are kept locally and will retry when the connection returns.',
+      );
+      setSaveState(navigator.onLine ? 'error' : 'offline');
       return false;
-    }
-    setError('');
-    return true;
-    } catch { setError('Unable to save. Check your connection and try again.'); return false; }
     });
     saveQueue.current = operation;
     return operation;
   };
+  useEffect(() => {
+    const retryPending = () => {
+      const pending = localStorage.getItem('bookdesk-pending-save');
+      if (!pending) {
+        setSaveState('saved');
+        return;
+      }
+      try {
+        const parsed = JSON.parse(pending) as {
+          books: Book[];
+          comments: Record<string, BookComment[]>;
+        };
+        void save(parsed.books, parsed.comments);
+      } catch {
+        localStorage.removeItem('bookdesk-pending-save');
+      }
+    };
+    const offline = () => setSaveState('offline');
+    window.addEventListener('online', retryPending);
+    window.addEventListener('offline', offline);
+    retryPending();
+    return () => {
+      window.removeEventListener('online', retryPending);
+      window.removeEventListener('offline', offline);
+    };
+  }, []);
   const logout = async () => {
     await fetch('/api/access', { method: 'DELETE' });
     location.reload();
@@ -245,17 +375,49 @@ export default function BookReviewClient() {
     setPendingPin(null);
   };
   const newBook = () => {
-    setDraft(blankBook);
+    const cached = localStorage.getItem('bookdesk-form-draft');
+    try {
+      setDraft(
+        cached ? { ...blankBook, ...(JSON.parse(cached) as Book) } : blankBook,
+      );
+    } catch {
+      setDraft(blankBook);
+    }
     setEditing(true);
     setSelected(null);
   };
-  const bookForCover = (cover: ApprovedCover) => books.find((book) =>
-    book.coverId === cover.id || (!book.coverId && book.grade === cover.grade && book.subject === cover.subject && book.version === cover.version),
-  );
+  useEffect(() => {
+    if (!editing) return;
+    setSaveState('saving');
+    const timer = window.setTimeout(() => {
+      localStorage.setItem('bookdesk-form-draft', JSON.stringify(draft));
+      setSaveState('saved');
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [draft, editing]);
+  const bookForCover = (cover: ApprovedCover) =>
+    books.find(
+      (book) =>
+        book.coverId === cover.id ||
+        (!book.coverId &&
+          book.grade === cover.grade &&
+          book.subject === cover.subject &&
+          book.version === cover.version),
+    );
   const openCover = (cover: ApprovedCover) => {
     const existing = bookForCover(cover);
-    if (existing) { openBook(existing); return; }
-    setDraft({ ...blankBook, coverId: cover.id, title: `${cover.subject} — ${cover.grade}`, grade: cover.grade, subject: cover.subject, version: cover.version });
+    if (existing) {
+      openBook(existing);
+      return;
+    }
+    setDraft({
+      ...blankBook,
+      coverId: cover.id,
+      title: `${cover.subject} — ${cover.grade}`,
+      grade: cover.grade,
+      subject: cover.subject,
+      version: cover.version,
+    });
     setSelected(null);
     setError('');
     setEditing(true);
@@ -264,14 +426,19 @@ export default function BookReviewClient() {
     event.preventDefault();
     if (saving) return;
     let pdf: string;
-    try { pdf = parsePdfLink(draft.pdf).url; }
-    catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Enter a valid PDF file link.');
+    try {
+      pdf = parsePdfLink(draft.pdf).url;
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : 'Enter a valid PDF file link.',
+      );
       return;
     }
     const book = {
       ...draft,
-      ...(draft.id && books.find(item => item.id === draft.id)?.pdf !== pdf ? { qc: emptyQc(), status: 'Ready for Review' } : {}),
+      ...(draft.id && books.find((item) => item.id === draft.id)?.pdf !== pdf
+        ? { qc: emptyQc(), status: 'Ready for Review' }
+        : {}),
       pdf,
       id: draft.id || crypto.randomUUID(),
       pageCount: Math.max(1, Number(draft.pageCount) || 1),
@@ -281,13 +448,16 @@ export default function BookReviewClient() {
       : [...books, book];
     setSaving(true);
     try {
-      if (!await save(next, comments)) return;
+      if (!(await save(next, comments))) return;
       setBooks(next);
       setDraft(book);
+      localStorage.removeItem('bookdesk-form-draft');
       openBook(book);
     } catch {
       setError('Unable to save. Check your connection and try again.');
-    } finally { setSaving(false); }
+    } finally {
+      setSaving(false);
+    }
   };
   const deleteBook = async (book: Book) => {
     if (!confirm(`Delete ${book.title}?`)) return;
@@ -302,7 +472,15 @@ export default function BookReviewClient() {
   const setStatus = async (status: string) => {
     if (!active) return;
     const next = books.map((book) =>
-      book.id === active.id ? { ...book, status, ...(getQc(book.qc).every(item => item.status === 'approved') ? { qc: emptyQc() } : {}) } : book,
+      book.id === active.id
+        ? {
+            ...book,
+            status,
+            ...(getQc(book.qc).every((item) => item.status === 'approved')
+              ? { qc: emptyQc() }
+              : {}),
+          }
+        : book,
     );
     setBooks(next);
     await save(next, comments);
@@ -310,14 +488,31 @@ export default function BookReviewClient() {
   const decideQc = async (level: number, approved: boolean) => {
     if (!active || qcSaving) return;
     try {
-      if (approved && unresolved(active)) throw new Error('Resolve the open page feedback before approving this level.');
+      if (approved && unresolved(active))
+        throw new Error(
+          'Resolve the open page feedback before approving this level.',
+        );
       const qc = reviewQc(active.qc, level, approved, reviewer, qcNote);
-      const status = qc.every(item => item.status === 'approved') ? 'Approved' : approved ? 'Ready for Review' : 'Changes Needed';
-      const next = books.map(book => book.id === active.id ? { ...book, qc, status } : book);
+      const status = qc.every((item) => item.status === 'approved')
+        ? 'Approved'
+        : approved
+          ? 'Ready for Review'
+          : 'Changes Needed';
+      const next = books.map((book) =>
+        book.id === active.id ? { ...book, qc, status } : book,
+      );
       setQcSaving(true);
-      if (await save(next, comments)) { setBooks(next); setQcNote(''); }
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to save QC review.'); }
-    finally { setQcSaving(false); }
+      if (await save(next, comments)) {
+        setBooks(next);
+        setQcNote('');
+      }
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : 'Unable to save QC review.',
+      );
+    } finally {
+      setQcSaving(false);
+    }
   };
   const postComment = async (event: FormEvent) => {
     event.preventDefault();
@@ -335,7 +530,15 @@ export default function BookReviewClient() {
       [active.id]: [...activeComments, item],
     };
     const nextBooks = books.map((book) =>
-      book.id === active.id ? { ...book, status: 'Changes Needed', ...(getQc(book.qc).every(item => item.status === 'approved') ? { qc: emptyQc() } : {}) } : book,
+      book.id === active.id
+        ? {
+            ...book,
+            status: 'Changes Needed',
+            ...(getQc(book.qc).every((item) => item.status === 'approved')
+              ? { qc: emptyQc() }
+              : {}),
+          }
+        : book,
     );
     setComments(nextComments);
     setBooks(nextBooks);
@@ -360,13 +563,22 @@ export default function BookReviewClient() {
   ) => {
     const box = event.currentTarget.getBoundingClientRect();
     return {
-      x: Math.max(0, Math.min(100, ((event.clientX - box.left) / box.width) * 100)),
-      y: Math.max(0, Math.min(100, ((event.clientY - box.top) / box.height) * 100)),
+      x: Math.max(
+        0,
+        Math.min(100, ((event.clientX - box.left) / box.width) * 100),
+      ),
+      y: Math.max(
+        0,
+        Math.min(100, ((event.clientY - box.top) / box.height) * 100),
+      ),
     };
   };
   const startStroke = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (pinning) {
-      setPendingPin(pointerPoint(event)); setPinning(false); setCommentPanel(true); setFocusedComment(null);
+      setPendingPin(pointerPoint(event));
+      setPinning(false);
+      setCommentPanel(true);
+      setFocusedComment(null);
       return;
     }
     if (!drawing) return;
@@ -391,12 +603,20 @@ export default function BookReviewClient() {
     }
     if (event.currentTarget.hasPointerCapture(event.pointerId))
       event.currentTarget.releasePointerCapture(event.pointerId);
+    const points =
+      annotationTool === 'rectangle'
+        ? [stroke[0], stroke[stroke.length - 1]]
+        : stroke;
+    const mark: AnnotationMark = {
+      id: crypto.randomUUID(),
+      tool: annotationTool === 'eraser' ? 'pen' : annotationTool,
+      points,
+      color: annotationColor,
+      width: annotationWidth,
+    };
     const annotations = {
       ...(active.annotations || {}),
-      [String(page)]: [
-        ...(active.annotations?.[String(page)] || []),
-        stroke,
-      ],
+      [String(page)]: [...(active.annotations?.[String(page)] || []), mark],
     };
     const next = books.map((book) =>
       book.id === active.id ? { ...book, annotations } : book,
@@ -406,6 +626,48 @@ export default function BookReviewClient() {
     setCommentPanel(true);
     setFocusedComment(null);
     setCurrentStroke([]);
+    setRedoMarks((current) => ({ ...current, [String(page)]: [] }));
+    await save(next, comments);
+  };
+  const removeMark = async (markIndex: number) => {
+    if (!active) return;
+    const pageKey = String(page);
+    const marks = [...(active.annotations?.[pageKey] || [])];
+    const [removed] = marks.splice(markIndex, 1);
+    const annotations = { ...(active.annotations || {}), [pageKey]: marks };
+    const next = books.map((book) =>
+      book.id === active.id ? { ...book, annotations } : book,
+    );
+    setBooks(next);
+    setRedoMarks((current) => ({
+      ...current,
+      [pageKey]: removed
+        ? [...(current[pageKey] || []), removed]
+        : current[pageKey] || [],
+    }));
+    await save(next, comments);
+  };
+  const undoAnnotation = async () => {
+    if (!active) return;
+    const marks = active.annotations?.[String(page)] || [];
+    if (!marks.length) return;
+    await removeMark(marks.length - 1);
+  };
+  const redoAnnotation = async () => {
+    if (!active) return;
+    const pageKey = String(page);
+    const stack = redoMarks[pageKey] || [];
+    const restored = stack[stack.length - 1];
+    if (!restored) return;
+    const annotations = {
+      ...(active.annotations || {}),
+      [pageKey]: [...(active.annotations?.[pageKey] || []), restored],
+    };
+    const next = books.map((book) =>
+      book.id === active.id ? { ...book, annotations } : book,
+    );
+    setBooks(next);
+    setRedoMarks((current) => ({ ...current, [pageKey]: stack.slice(0, -1) }));
     await save(next, comments);
   };
   const clearPageDrawing = async () => {
@@ -431,7 +693,25 @@ export default function BookReviewClient() {
               <p className="text-[11px] text-black/40">Complete book review</p>
             </div>
           </div>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
+            <span
+              className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold ${saveState === 'saved' ? 'bg-emerald-50 text-emerald-700' : saveState === 'saving' ? 'bg-blue-50 text-blue-700' : saveState === 'offline' ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-700'}`}
+            >
+              {saveState === 'saved' ? (
+                <CheckCircle2 className="size-3.5" />
+              ) : saveState === 'saving' ? (
+                <RefreshCw className="size-3.5 animate-spin" />
+              ) : (
+                <CloudOff className="size-3.5" />
+              )}
+              {saveState === 'saved'
+                ? 'Saved'
+                : saveState === 'saving'
+                  ? 'Saving…'
+                  : saveState === 'offline'
+                    ? 'Offline · retry queued'
+                    : 'Save failed · retry queued'}
+            </span>
             <Button variant="outline" onClick={newBook}>
               <Plus />
               Add book
@@ -444,7 +724,14 @@ export default function BookReviewClient() {
         </div>
       </header>
       <div className="mx-auto max-w-[1500px] px-5 py-9">
-        {error && !editing && <p role="alert" className="mb-4 rounded-xl bg-red-50 p-4 text-sm text-red-700">{error}</p>}
+        {error && !editing && (
+          <p
+            role="alert"
+            className="mb-4 rounded-xl bg-red-50 p-4 text-sm text-red-700"
+          >
+            {error}
+          </p>
+        )}
         {editing ? (
           <form
             onSubmit={saveBook}
@@ -527,13 +814,23 @@ export default function BookReviewClient() {
                   onChange={(e) => setDraft({ ...draft, pdf: e.target.value })}
                   placeholder="https://drive.google.com/file/d/.../view"
                 />
-                <span className="mt-2 block text-xs font-normal text-black/55">Open the PDF in Drive → Share → Copy link. Folder and search links cannot be used.</span>
+                <span className="mt-2 block text-xs font-normal text-black/55">
+                  Open the PDF in Drive → Share → Copy link. Folder and search
+                  links cannot be used.
+                </span>
               </label>
               <label htmlFor="book-uploader" className="text-xs font-semibold">
                 Book uploader name
-                <Input id="book-uploader" className="mt-2" required value={draft.uploader || ''}
-                  onChange={(e) => setDraft({ ...draft, uploader: e.target.value })}
-                  placeholder="Your name" />
+                <Input
+                  id="book-uploader"
+                  className="mt-2"
+                  required
+                  value={draft.uploader || ''}
+                  onChange={(e) =>
+                    setDraft({ ...draft, uploader: e.target.value })
+                  }
+                  placeholder="Your name"
+                />
               </label>
               <label className="text-xs font-semibold">
                 Total pages
@@ -549,7 +846,14 @@ export default function BookReviewClient() {
                 />
               </label>
             </div>
-            {error && <p role="alert" className="mt-5 rounded-xl bg-red-50 p-4 text-sm text-red-700">{error}</p>}
+            {error && (
+              <p
+                role="alert"
+                className="mt-5 rounded-xl bg-red-50 p-4 text-sm text-red-700"
+              >
+                {error}
+              </p>
+            )}
             <Button type="submit" className="mt-7 w-full" disabled={saving}>
               <Save />
               {saving ? 'Saving…' : 'Save PDF and open review'}
@@ -568,344 +872,787 @@ export default function BookReviewClient() {
             >
               <X className="size-5" />
             </Button>
-          <section className="grid min-h-[calc(100vh-145px)] overflow-hidden rounded-[28px] border border-white/80 bg-white/70 shadow-2xl xl:grid-cols-[minmax(0,1fr)_360px]">
-            <div ref={viewerRef} className={fullscreen ? 'fixed inset-0 z-50 flex h-dvh w-full flex-col bg-[#1c271f] p-3' : 'relative flex min-h-[720px] flex-col bg-[#1c271f] p-5'}>
-              <div className="mb-4 flex items-center justify-between gap-3 text-white">
-                <div>
-                  <p className="text-xs text-white/45">
-                    {active.grade} · {active.subject} · {active.version}
-                  </p>
-                  <h1 className="mt-1 text-lg font-semibold">{active.title}</h1>
-                </div>
-                <div className={fullscreen ? 'absolute right-4 top-4 z-40 flex max-w-[90%] flex-wrap justify-end gap-2 rounded-2xl bg-[#1c271f]/95 p-3 shadow-xl' : 'flex flex-wrap items-center gap-2'}>
-                  <Button variant="outline" size="sm" className="border-white/25 bg-[#f5f5ef] text-[#1c271f] hover:bg-white hover:text-[#1c271f]" onClick={() => void toggleFullscreen()} aria-label={fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}>
-                    {fullscreen ? <Minimize /> : <Maximize />}{fullscreen ? 'Exit' : 'Fullscreen'}
-                  </Button>
-                  <div role="group" aria-label="PDF zoom" className="flex items-center gap-1 rounded-lg bg-[#f5f5ef] p-0.5 text-[#1c271f]">
-                    <Button type="button" variant="ghost" size="icon-sm" aria-label="Zoom out" title="Zoom out" disabled={zoom <= 50} onClick={() => setZoom(value => Math.max(50, value - 25))} className="text-[#1c271f] hover:bg-black/10 hover:text-[#1c271f]"><ZoomOut /></Button>
-                    <Button type="button" variant="ghost" size="sm" aria-label={`Zoom ${zoom} percent. Reset to fit width`} title="Reset to fit width" onClick={() => setZoom(100)} className="min-w-14 text-[#1c271f] hover:bg-black/10 hover:text-[#1c271f]">{zoom}%</Button>
-                    <Button type="button" variant="ghost" size="icon-sm" aria-label="Zoom in" title="Zoom in" disabled={zoom >= 300} onClick={() => setZoom(value => Math.min(300, value + 25))} className="text-[#1c271f] hover:bg-black/10 hover:text-[#1c271f]"><ZoomIn /></Button>
+            <section className="grid min-h-[calc(100vh-145px)] overflow-hidden rounded-[28px] border border-white/80 bg-white/70 shadow-2xl xl:grid-cols-[minmax(0,1fr)_360px]">
+              <div
+                ref={viewerRef}
+                className={
+                  fullscreen
+                    ? 'fixed inset-0 z-50 flex h-dvh w-full flex-col bg-[#1c271f] p-3'
+                    : 'relative flex min-h-[720px] flex-col bg-[#1c271f] p-5'
+                }
+              >
+                <div className="mb-4 flex items-center justify-between gap-3 text-white">
+                  <div>
+                    <p className="text-xs text-white/45">
+                      {active.grade} · {active.subject} · {active.version}
+                    </p>
+                    <h1 className="mt-1 text-lg font-semibold">
+                      {active.title}
+                    </h1>
                   </div>
-                  <Button variant={pinning ? 'default' : 'outline'} size="sm" className={pinning ? 'border-[#dafa73] bg-[#dafa73] text-[#1c271f] hover:bg-[#c9ed61] hover:text-[#1c271f]' : 'border-white/25 bg-[#f5f5ef] text-[#1c271f] hover:bg-white hover:text-[#1c271f]'} aria-pressed={pinning} onClick={() => { setPinning(!pinning); setDrawing(false); }}><MapPin />Pin</Button>
-                  {fullscreen && <Button variant="outline" size="sm" className={commentPanel ? 'border-[#dafa73] bg-[#dafa73] text-[#1c271f] hover:bg-[#c9ed61] hover:text-[#1c271f]' : 'border-white/25 bg-[#f5f5ef] text-[#1c271f] hover:bg-white hover:text-[#1c271f]'} aria-pressed={commentPanel} onClick={() => setCommentPanel(!commentPanel)}><MessageCircle />Comment</Button>}
-                  <Button
-                    onClick={() => { setDrawing(!drawing); setPinning(false); }}
-                    variant={drawing ? 'default' : 'outline'}
-                    size="sm"
+                  <div
                     className={
-                      drawing
-                        ? 'bg-[#dafa73] text-[#1c271f] hover:bg-[#dafa73]/90'
-                        : 'border-white/20 bg-white/5 text-white hover:bg-white/10 hover:text-white'
+                      fullscreen
+                        ? 'absolute right-4 top-4 z-40 flex max-w-[90%] flex-wrap justify-end gap-2 rounded-2xl bg-[#1c271f]/95 p-3 shadow-xl'
+                        : 'flex flex-wrap items-center gap-2'
                     }
                   >
-                    <Pencil />
-                    {drawing ? 'Drawing on' : 'Scribble'}
-                  </Button>
-                  <Button
-                    onClick={() => void clearPageDrawing()}
-                    variant="outline"
-                    size="sm"
-                    className="border-white/20 bg-white/5 text-white hover:bg-white/10 hover:text-white"
-                  >
-                    <Eraser />
-                    Clear page
-                  </Button>
-                  <Badge className={statusClass[active.status]}>
-                    {active.status}
-                  </Badge>
-                </div>
-              </div>
-              <PdfPage key={`${active.id}-${active.pdf}`} url={active.pdf} page={page} onPageCount={setActualPages} fullscreen={fullscreen} zoom={zoom}>
-                <svg
-                  viewBox="0 0 100 100"
-                  preserveAspectRatio="none"
-                  onPointerDown={startStroke}
-                  onPointerMove={moveStroke}
-                  onPointerUp={finishStroke}
-                  onPointerCancel={finishStroke}
-                  onDoubleClick={(event) => {
-                    const point = pointerPoint(event);
-                    setPendingPin(point);
-                    setDrawing(false);
-                  }}
-                  className={`absolute inset-0 z-10 h-full w-full touch-none ${drawing || pinning ? 'cursor-crosshair pointer-events-auto' : 'pointer-events-none'}`}
-                  aria-label="Page drawing layer"
-                >
-                  {[
-                    ...(active.annotations?.[String(page)] || []),
-                    ...(currentStroke.length ? [currentStroke] : []),
-                  ].map((stroke, index) => (
-                    <polyline
-                      key={index}
-                      points={stroke
-                        .map((point) => `${point.x},${point.y}`)
-                        .join(' ')}
-                      fill="none"
-                      stroke="#ef4444"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      vectorEffect="non-scaling-stroke"
-                      style={{ pointerEvents: drawing || pinning ? 'none' : 'stroke', cursor: 'pointer' }}
-                      onClick={() => {
-                        const pin = stroke[stroke.length - 1];
-                        const linked = activeComments.find(item => item.page === page && item.pin?.x === pin?.x && item.pin?.y === pin?.y);
-                        if (linked) {
-                          setFocusedComment(linked.id);
-                          setCommentPanel(true);
-                          if (!fullscreen) document.getElementById(`feedback-${linked.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                        } else {
-                          setPendingPin(pin || null);
-                          setCommentPanel(true);
-                          if (!fullscreen) document.getElementById('page-feedback')?.focus();
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="border-white/25 bg-[#f5f5ef] text-[#1c271f] hover:bg-white hover:text-[#1c271f]"
+                      onClick={() => void toggleFullscreen()}
+                      aria-label={
+                        fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'
+                      }
+                    >
+                      {fullscreen ? <Minimize /> : <Maximize />}
+                      {fullscreen ? 'Exit' : 'Fullscreen'}
+                    </Button>
+                    <div
+                      role="group"
+                      aria-label="PDF zoom"
+                      className="flex items-center gap-1 rounded-lg bg-[#f5f5ef] p-0.5 text-[#1c271f]"
+                    >
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label="Zoom out"
+                        title="Zoom out"
+                        disabled={zoom <= 50}
+                        onClick={() =>
+                          setZoom((value) => Math.max(50, value - 25))
                         }
-                      }}
-                    />
-                  ))}
-                </svg>
-                {activeComments
-                  .filter((item) => item.page === page && item.pin)
-                  .map((item, index) => (
-                    <button
-                      key={item.id}
-                      title={item.text}
-                      onClick={() => { setFocusedComment(item.id); setCommentPanel(true); if (!fullscreen) document.getElementById(`feedback-${item.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }}
-                      aria-label={`Read comment: ${item.text}`}
-                      className="absolute z-20 grid size-7 -translate-x-1/2 -translate-y-full place-items-center rounded-full bg-red-500 text-xs font-bold text-white shadow-lg ring-2 ring-white"
-                      style={{
-                        left: `${item.pin!.x}%`,
-                        top: `${item.pin!.y}%`,
+                        className="text-[#1c271f] hover:bg-black/10 hover:text-[#1c271f]"
+                      >
+                        <ZoomOut />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        aria-label={`Zoom ${zoom} percent. Reset to fit width`}
+                        title="Reset to fit width"
+                        onClick={() => setZoom(100)}
+                        className="min-w-14 text-[#1c271f] hover:bg-black/10 hover:text-[#1c271f]"
+                      >
+                        {zoom}%
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label="Zoom in"
+                        title="Zoom in"
+                        disabled={zoom >= 300}
+                        onClick={() =>
+                          setZoom((value) => Math.min(300, value + 25))
+                        }
+                        className="text-[#1c271f] hover:bg-black/10 hover:text-[#1c271f]"
+                      >
+                        <ZoomIn />
+                      </Button>
+                    </div>
+                    <Button
+                      variant={pinning ? 'default' : 'outline'}
+                      size="sm"
+                      className={
+                        pinning
+                          ? 'border-[#dafa73] bg-[#dafa73] text-[#1c271f] hover:bg-[#c9ed61] hover:text-[#1c271f]'
+                          : 'border-white/25 bg-[#f5f5ef] text-[#1c271f] hover:bg-white hover:text-[#1c271f]'
+                      }
+                      aria-pressed={pinning}
+                      onClick={() => {
+                        setPinning(!pinning);
+                        setDrawing(false);
                       }}
                     >
-                      {index + 1}
-                    </button>
-                  ))}
-                {pendingPin && (
-                  <span
-                    className="absolute z-20 grid size-7 -translate-x-1/2 -translate-y-full place-items-center rounded-full bg-amber-400 text-xs font-bold text-black ring-2 ring-white"
-                    style={{
-                      left: `${pendingPin.x}%`,
-                      top: `${pendingPin.y}%`,
-                    }}
-                  >
-                    <MapPin className="size-4" />
-                  </span>
-                )}
-              </PdfPage>
-              {fullscreen && commentPanel && (
-                <div className="absolute bottom-20 right-4 z-40 max-h-[60vh] w-[min(340px,calc(100%-2rem))] overflow-auto rounded-2xl bg-white p-4 shadow-2xl">
-                  <div className="flex items-center justify-between">
-                    <h2 className="font-semibold">Page {page} feedback</h2>
-                    <Button aria-label="Close comments" variant="ghost" size="icon" onClick={() => setCommentPanel(false)}><X /></Button>
+                      <MapPin />
+                      Pin
+                    </Button>
+                    {fullscreen && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className={
+                          commentPanel
+                            ? 'border-[#dafa73] bg-[#dafa73] text-[#1c271f] hover:bg-[#c9ed61] hover:text-[#1c271f]'
+                            : 'border-white/25 bg-[#f5f5ef] text-[#1c271f] hover:bg-white hover:text-[#1c271f]'
+                        }
+                        aria-pressed={commentPanel}
+                        onClick={() => setCommentPanel(!commentPanel)}
+                      >
+                        <MessageCircle />
+                        Comment
+                      </Button>
+                    )}
+                    <Button
+                      onClick={() => {
+                        setDrawing(!(drawing && annotationTool === 'pen'));
+                        setAnnotationTool('pen');
+                        setPinning(false);
+                      }}
+                      variant={drawing ? 'default' : 'outline'}
+                      size="sm"
+                      className={
+                        drawing
+                          ? 'bg-[#dafa73] text-[#1c271f] hover:bg-[#dafa73]/90'
+                          : 'border-white/20 bg-white/5 text-white hover:bg-white/10 hover:text-white'
+                      }
+                    >
+                      <Pencil />
+                      {drawing ? 'Drawing on' : 'Scribble'}
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        setDrawing(true);
+                        setAnnotationTool('highlight');
+                        setPinning(false);
+                      }}
+                      variant="outline"
+                      size="sm"
+                      className={
+                        drawing && annotationTool === 'highlight'
+                          ? 'bg-[#dafa73] text-[#1c271f]'
+                          : 'border-white/20 bg-white/5 text-white'
+                      }
+                    >
+                      <Highlighter />
+                      Highlight
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        setDrawing(true);
+                        setAnnotationTool('rectangle');
+                        setPinning(false);
+                      }}
+                      variant="outline"
+                      size="sm"
+                      className={
+                        drawing && annotationTool === 'rectangle'
+                          ? 'bg-[#dafa73] text-[#1c271f]'
+                          : 'border-white/20 bg-white/5 text-white'
+                      }
+                    >
+                      <Square />
+                      Rectangle
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        setDrawing(false);
+                        setAnnotationTool('eraser');
+                        setPinning(false);
+                      }}
+                      variant="outline"
+                      size="sm"
+                      className={
+                        annotationTool === 'eraser'
+                          ? 'bg-red-100 text-red-700'
+                          : 'border-white/20 bg-white/5 text-white'
+                      }
+                    >
+                      <Eraser />
+                      Erase mark
+                    </Button>
+                    <input
+                      type="color"
+                      value={annotationColor}
+                      onChange={(event) =>
+                        setAnnotationColor(event.target.value)
+                      }
+                      aria-label="Annotation colour"
+                      title="Annotation colour"
+                      className="size-8 rounded border border-white/20 bg-transparent"
+                    />
+                    <select
+                      value={annotationWidth}
+                      onChange={(event) =>
+                        setAnnotationWidth(Number(event.target.value))
+                      }
+                      aria-label="Annotation line width"
+                      className="h-8 rounded border border-white/20 bg-[#f5f5ef] px-2 text-xs text-[#1c271f]"
+                    >
+                      <option value={1}>Thin</option>
+                      <option value={2}>Medium</option>
+                      <option value={4}>Thick</option>
+                    </select>
+                    <Button
+                      onClick={() => void undoAnnotation()}
+                      disabled={!active.annotations?.[String(page)]?.length}
+                      variant="outline"
+                      size="icon-sm"
+                      className="border-white/20 bg-white/5 text-white"
+                      aria-label="Undo annotation"
+                    >
+                      <Undo2 />
+                    </Button>
+                    <Button
+                      onClick={() => void redoAnnotation()}
+                      disabled={!redoMarks[String(page)]?.length}
+                      variant="outline"
+                      size="icon-sm"
+                      className="border-white/20 bg-white/5 text-white"
+                      aria-label="Redo annotation"
+                    >
+                      <Redo2 />
+                    </Button>
+                    <Button
+                      onClick={() => setShowAnnotations(!showAnnotations)}
+                      variant="outline"
+                      size="icon-sm"
+                      className="border-white/20 bg-white/5 text-white"
+                      aria-label={
+                        showAnnotations
+                          ? 'Hide annotations'
+                          : 'Show annotations'
+                      }
+                    >
+                      {showAnnotations ? <EyeOff /> : <Eye />}
+                    </Button>
+                    <Button
+                      onClick={() => void clearPageDrawing()}
+                      variant="outline"
+                      size="sm"
+                      className="border-white/20 bg-white/5 text-white hover:bg-white/10 hover:text-white"
+                    >
+                      <Eraser />
+                      Clear page
+                    </Button>
+                    <Badge className={statusClass[active.status]}>
+                      {active.status}
+                    </Badge>
                   </div>
-                  {activeComments.filter(item => item.page === page).map(item => (
-                    <div key={item.id} className={`mt-3 rounded-xl border p-3 text-sm ${focusedComment === item.id ? 'border-amber-400 bg-amber-50' : 'border-black/10'}`}>
-                      <p className="break-words">{item.text}</p>
-                      <Button className="mt-2" size="sm" variant="outline" onClick={() => void toggleDone(item.id)}>{item.done ? 'Reopen' : 'Mark done'}</Button>
-                    </div>
-                  ))}
-                  <form onSubmit={postComment} className="mt-3">
-                    <label htmlFor="fullscreen-feedback" className="text-xs font-semibold">{pendingPin ? 'Comment on selected mark / pin' : 'Comment on this page'}</label>
-                    <Textarea id="fullscreen-feedback" value={comment} onChange={event => setComment(event.target.value)} placeholder="Write feedback…" className="mt-2 bg-white" />
-                    {error && <p role="alert" className="mt-2 text-xs text-red-600">{error}</p>}
-                    <Button type="submit" className="mt-3 w-full" disabled={!comment.trim()}><Send />Post feedback</Button>
-                  </form>
                 </div>
-              )}
-              <Button
-                onClick={() => {
-                  setPage(Math.max(1, page - 1));
-                  setPendingPin(null);
-                  setComment('');
-                  setCurrentStroke([]);
-                  strokeRef.current = [];
-                }}
-                disabled={page <= 1}
-                variant="ghost"
-                size="icon-lg"
-                className="absolute left-7 top-1/2 z-30 rounded-full bg-black/55 text-white hover:bg-black/75 hover:text-white"
-              >
-                <ChevronLeft />
-              </Button>
-              <Button
-                onClick={() => {
-                  setPage(Math.min((actualPages ?? active.pageCount), page + 1));
-                  setPendingPin(null);
-                  setComment('');
-                  setCurrentStroke([]);
-                  strokeRef.current = [];
-                }}
-                disabled={page >= (actualPages ?? active.pageCount)}
-                variant="ghost"
-                size="icon-lg"
-                className="absolute right-7 top-1/2 z-30 rounded-full bg-black/55 text-white hover:bg-black/75 hover:text-white"
-              >
-                <ChevronRight />
-              </Button>
-              <div className="mt-4 flex items-center justify-center gap-3 text-sm text-white">
-                <span>Page</span>
-                <Input
-                  className="h-9 w-20 border-white/15 bg-white/10 text-center text-white"
-                  type="number"
-                  min={1}
-                  max={(actualPages ?? active.pageCount)}
-                  value={page}
-                  onChange={(e) => {
+                <PdfPage
+                  key={`${active.id}-${active.pdf}`}
+                  url={active.pdf}
+                  page={page}
+                  onPageCount={setActualPages}
+                  fullscreen={fullscreen}
+                  zoom={zoom}
+                >
+                  <svg
+                    viewBox="0 0 100 100"
+                    preserveAspectRatio="none"
+                    onPointerDown={startStroke}
+                    onPointerMove={moveStroke}
+                    onPointerUp={finishStroke}
+                    onPointerCancel={finishStroke}
+                    onDoubleClick={(event) => {
+                      const point = pointerPoint(event);
+                      setPendingPin(point);
+                      setDrawing(false);
+                    }}
+                    className={`absolute inset-0 z-10 h-full w-full touch-none ${drawing || pinning || annotationTool === 'eraser' ? 'cursor-crosshair pointer-events-auto' : 'pointer-events-none'}`}
+                    aria-label="Page drawing layer"
+                  >
+                    {showAnnotations &&
+                      [
+                        ...(active.annotations?.[String(page)] || []),
+                        ...(currentStroke.length ? [currentStroke] : []),
+                      ].map((annotation, index) => {
+                        const mark = normaliseMark(annotation, index);
+                        const first = mark.points[0];
+                        const last = mark.points[mark.points.length - 1];
+                        const selectMark = () => {
+                          if (annotationTool === 'eraser') {
+                            void removeMark(index);
+                            return;
+                          }
+                          const linked = activeComments.find(
+                            (item) =>
+                              item.page === page &&
+                              item.pin?.x === last?.x &&
+                              item.pin?.y === last?.y,
+                          );
+                          if (linked) {
+                            setFocusedComment(linked.id);
+                            setCommentPanel(true);
+                            if (!fullscreen)
+                              document
+                                .getElementById(`feedback-${linked.id}`)
+                                ?.scrollIntoView({
+                                  behavior: 'smooth',
+                                  block: 'nearest',
+                                });
+                          } else {
+                            setPendingPin(last || null);
+                            setCommentPanel(true);
+                            if (!fullscreen)
+                              document.getElementById('page-feedback')?.focus();
+                          }
+                        };
+                        const common = {
+                          fill: 'none',
+                          stroke: mark.color,
+                          strokeWidth:
+                            mark.tool === 'highlight'
+                              ? Math.max(8, mark.width * 3)
+                              : mark.width,
+                          vectorEffect: 'non-scaling-stroke' as const,
+                          style: {
+                            pointerEvents:
+                              drawing || pinning
+                                ? ('none' as const)
+                                : ('stroke' as const),
+                            cursor:
+                              annotationTool === 'eraser'
+                                ? 'not-allowed'
+                                : 'pointer',
+                          },
+                          onClick: selectMark,
+                        };
+                        return mark.tool === 'rectangle' ? (
+                          <rect
+                            key={mark.id}
+                            x={Math.min(first.x, last.x)}
+                            y={Math.min(first.y, last.y)}
+                            width={Math.abs(last.x - first.x)}
+                            height={Math.abs(last.y - first.y)}
+                            {...common}
+                          />
+                        ) : (
+                          <polyline
+                            key={mark.id}
+                            points={mark.points
+                              .map((point) => `${point.x},${point.y}`)
+                              .join(' ')}
+                            strokeOpacity={mark.tool === 'highlight' ? 0.38 : 1}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            {...common}
+                          />
+                        );
+                      })}
+                  </svg>
+                  {activeComments
+                    .filter((item) => item.page === page && item.pin)
+                    .map((item, index) => (
+                      <button
+                        key={item.id}
+                        title={item.text}
+                        onClick={() => {
+                          setFocusedComment(item.id);
+                          setCommentPanel(true);
+                          if (!fullscreen)
+                            document
+                              .getElementById(`feedback-${item.id}`)
+                              ?.scrollIntoView({
+                                behavior: 'smooth',
+                                block: 'nearest',
+                              });
+                        }}
+                        aria-label={`Read comment: ${item.text}`}
+                        className="absolute z-20 grid size-7 -translate-x-1/2 -translate-y-full place-items-center rounded-full bg-red-500 text-xs font-bold text-white shadow-lg ring-2 ring-white"
+                        style={{
+                          left: `${item.pin!.x}%`,
+                          top: `${item.pin!.y}%`,
+                        }}
+                      >
+                        {index + 1}
+                      </button>
+                    ))}
+                  {pendingPin && (
+                    <span
+                      className="absolute z-20 grid size-7 -translate-x-1/2 -translate-y-full place-items-center rounded-full bg-amber-400 text-xs font-bold text-black ring-2 ring-white"
+                      style={{
+                        left: `${pendingPin.x}%`,
+                        top: `${pendingPin.y}%`,
+                      }}
+                    >
+                      <MapPin className="size-4" />
+                    </span>
+                  )}
+                </PdfPage>
+                {fullscreen && commentPanel && (
+                  <div className="absolute bottom-20 right-4 z-40 max-h-[60vh] w-[min(340px,calc(100%-2rem))] overflow-auto rounded-2xl bg-white p-4 shadow-2xl">
+                    <div className="flex items-center justify-between">
+                      <h2 className="font-semibold">Page {page} feedback</h2>
+                      <Button
+                        aria-label="Close comments"
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setCommentPanel(false)}
+                      >
+                        <X />
+                      </Button>
+                    </div>
+                    {activeComments
+                      .filter((item) => item.page === page)
+                      .map((item) => (
+                        <div
+                          key={item.id}
+                          className={`mt-3 rounded-xl border p-3 text-sm ${focusedComment === item.id ? 'border-amber-400 bg-amber-50' : 'border-black/10'}`}
+                        >
+                          <p className="break-words">{item.text}</p>
+                          <Button
+                            className="mt-2"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void toggleDone(item.id)}
+                          >
+                            {item.done ? 'Reopen' : 'Mark done'}
+                          </Button>
+                        </div>
+                      ))}
+                    <form onSubmit={postComment} className="mt-3">
+                      <label
+                        htmlFor="fullscreen-feedback"
+                        className="text-xs font-semibold"
+                      >
+                        {pendingPin
+                          ? 'Comment on selected mark / pin'
+                          : 'Comment on this page'}
+                      </label>
+                      <Textarea
+                        id="fullscreen-feedback"
+                        value={comment}
+                        onChange={(event) => setComment(event.target.value)}
+                        placeholder="Write feedback…"
+                        className="mt-2 bg-white"
+                      />
+                      {error && (
+                        <p role="alert" className="mt-2 text-xs text-red-600">
+                          {error}
+                        </p>
+                      )}
+                      <Button
+                        type="submit"
+                        className="mt-3 w-full"
+                        disabled={!comment.trim()}
+                      >
+                        <Send />
+                        Post feedback
+                      </Button>
+                    </form>
+                  </div>
+                )}
+                <Button
+                  onClick={() => {
+                    setPage(Math.max(1, page - 1));
+                    setPendingPin(null);
+                    setComment('');
+                    setCurrentStroke([]);
+                    strokeRef.current = [];
+                  }}
+                  disabled={page <= 1}
+                  variant="ghost"
+                  size="icon-lg"
+                  className="absolute left-7 top-1/2 z-30 rounded-full bg-black/55 text-white hover:bg-black/75 hover:text-white"
+                >
+                  <ChevronLeft />
+                </Button>
+                <Button
+                  onClick={() => {
                     setPage(
-                      Math.min(
-                        (actualPages ?? active.pageCount),
-                        Math.max(1, Number(e.target.value) || 1),
-                      ),
+                      Math.min(actualPages ?? active.pageCount, page + 1),
                     );
                     setPendingPin(null);
                     setComment('');
                     setCurrentStroke([]);
                     strokeRef.current = [];
                   }}
-                />
-                <span>of {(actualPages ?? active.pageCount)}</span>
-                <span className="ml-3 text-xs text-white/45">
-                  Draw a mark, then write feedback to pin it to that location.
-                </span>
-              </div>
-            </div>
-            <aside className="max-h-[calc(100vh-145px)] overflow-y-auto p-6">
-              <div className="mb-5 flex items-center gap-4 rounded-2xl border border-black/8 bg-white p-3">
-                <div className="h-24 w-28 shrink-0 overflow-hidden rounded-lg bg-[#f2f2ec]">
-                  {activeCover ? <ApprovedCoverImage key={activeCover.image} cover={activeCover} contain /> : (
-                    <div className="flex h-full flex-col items-center justify-center gap-2 text-black/40">
-                      <BookOpen className="size-7" />
-                      <span className="text-[10px]">No cover linked</span>
-                    </div>
-                  )}
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[#607468]">Book cover</p>
-                  <p className="mt-1 break-words text-sm font-semibold">{active.title}</p>
-                  <p className="mt-1 text-xs text-black/45">{active.grade} · {active.version}</p>
-                </div>
-              </div>
-              <p className="mb-3 text-sm text-black/55">Uploaded by {active.uploader || 'Not recorded'}</p>
-              <Button variant="outline" className="mb-5" onClick={() => { setDraft(active); setEditing(true); }}>
-                <FileText /> Update PDF link
-              </Button>
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[.14em] text-[#607468]">
-                    Review status
-                  </p>
-                  <p className="mt-1 text-xs text-black/40">
-                    Decision for the complete book
-                  </p>
-                </div>
-              </div>
-              <section aria-label="Three-level quality control" className="mt-5 space-y-3">
-                <h2 className="font-semibold">Quality control · {getQc(active.qc).filter(item => item.status === 'approved').length}/3 passed</h2>
-                <label htmlFor="qc-reviewer" className="block text-xs font-semibold">Reviewer name</label>
-                <Input id="qc-reviewer" value={reviewer} onChange={event => setReviewer(event.target.value)} placeholder="Your name" />
-                <label htmlFor="qc-note" className="block text-xs font-semibold">QC notes</label>
-                <Textarea id="qc-note" value={qcNote} onChange={event => setQcNote(event.target.value)} placeholder="Required when requesting changes" />
-                {QC_LEVELS.map((label, level) => {
-                  const review = getQc(active.qc)[level];
-                  const locked = getQc(active.qc).slice(0, level).some(item => item.status !== 'approved');
-                  return <div key={label} className={`rounded-2xl border p-4 ${review.status === 'approved' ? 'border-emerald-200 bg-emerald-50' : 'border-black/10 bg-white'}`}>
-                    <div className="flex items-center justify-between gap-2"><h3 className="text-sm font-semibold">QC {level + 1} · {label}</h3>{review.status === 'approved' && <Check className="size-4 text-emerald-700" />}</div>
-                    <p className="mt-1 text-xs text-black/55">{locked ? 'Locked until the previous level passes' : review.status === 'approved' ? 'Passed' : review.status === 'changes-needed' ? 'Changes needed' : 'Awaiting review'}</p>
-                    {review.reviewer && <p className="mt-2 text-xs text-black/55">{review.reviewer} · {new Date(review.reviewedAt).toLocaleString()}</p>}
-                    {review.note && <p className="mt-2 break-words text-sm">{review.note}</p>}
-                    {!locked && <div className="mt-3 flex flex-wrap gap-2">
-                      {review.status !== 'approved' && <Button size="sm" disabled={qcSaving || !reviewer.trim() || unresolved(active) > 0} onClick={() => void decideQc(level, true)}>Pass QC {level + 1}</Button>}
-                      <Button variant="outline" size="sm" disabled={qcSaving || !reviewer.trim() || !qcNote.trim()} onClick={() => void decideQc(level, false)}>{review.status === 'approved' ? 'Reopen level' : 'Request changes'}</Button>
-                    </div>}
-                  </div>;
-                })}
-                {unresolved(active) > 0 && <p className="text-xs text-amber-700">Resolve {unresolved(active)} open feedback item(s) before passing QC.</p>}
-                <p className="text-xs text-black/45">Reopening a level resets later approvals. Replacing the PDF starts QC again.</p>
-              </section>
-              <div className="mt-5 grid grid-cols-2 gap-2">
-                {statuses.map((status) => (
-                  <button
-                    key={status}
-                    onClick={() => void setStatus(status)}
-                    className={`min-h-14 rounded-2xl border px-3 text-left text-sm transition ${active.status === status ? 'border-[#1c2b22] bg-[#1c2b22] text-white shadow-lg' : 'border-black/8 bg-white hover:border-black/20'}`}
-                  >
-                    {status}
-                  </button>
-                ))}
-              </div>
-              <div className="mt-8 border-t border-black/8 pt-6">
-                <div className="flex items-center justify-between">
-                  <h2 className="font-semibold">Page feedback</h2>
-                  <Badge>{activeComments.length}</Badge>
-                </div>
-                <p className="mt-1 text-xs text-black/40">
-                  Comments are saved against the selected page.
-                </p>
-                <div className="mt-4 space-y-3">
-                  {activeComments.map((item) => (
-                    <article
-                      key={item.id}
-                      id={`feedback-${item.id}`}
-                      style={focusedComment === item.id ? { outline: '2px solid #eab308' } : undefined}
-                      className={`rounded-2xl border p-4 ${item.done ? 'border-emerald-200 bg-emerald-50/70' : 'border-black/8 bg-white'}`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <button
-                          onClick={() => { setPage(item.page); setPendingPin(null); setComment(''); setFocusedComment(item.id); }}
-                          className="rounded-full bg-[#edf1e8] px-2.5 py-1 text-xs font-semibold"
-                        >
-                          Page {item.page}
-                          {item.pin ? ' · Pinned' : ''}
-                        </button>
-                        <span className="text-[10px] text-black/35">
-                          {item.time}
-                        </span>
-                      </div>
-                      <p
-                        className={`mt-3 break-words text-sm leading-5 ${item.done ? 'text-black/40 line-through' : 'text-black/65'}`}
-                      >
-                        {item.text}
-                      </p>
-                      <Button
-                        onClick={() => void toggleDone(item.id)}
-                        size="sm"
-                        variant={item.done ? 'outline' : 'default'}
-                        className="mt-3"
-                      >
-                        <Check />
-                        {item.done ? 'Reopen' : 'Mark done'}
-                      </Button>
-                    </article>
-                  ))}
-                </div>
-                <form
-                  onSubmit={postComment}
-                  className="mt-5 rounded-2xl bg-[#eef3e9] p-4"
+                  disabled={page >= (actualPages ?? active.pageCount)}
+                  variant="ghost"
+                  size="icon-lg"
+                  className="absolute right-7 top-1/2 z-30 rounded-full bg-black/55 text-white hover:bg-black/75 hover:text-white"
                 >
-                  <label className="flex items-center justify-between text-xs font-semibold">
-                    <span>Comment for page {page}</span>
-                    {pendingPin && (
-                      <span className="flex items-center gap-1 text-amber-700">
-                        <MapPin className="size-3" />
-                        Pinned on page
-                      </span>
+                  <ChevronRight />
+                </Button>
+                <div className="mt-4 flex items-center justify-center gap-3 text-sm text-white">
+                  <span>Page</span>
+                  <Input
+                    className="h-9 w-20 border-white/15 bg-white/10 text-center text-white"
+                    type="number"
+                    min={1}
+                    max={actualPages ?? active.pageCount}
+                    value={page}
+                    onChange={(e) => {
+                      setPage(
+                        Math.min(
+                          actualPages ?? active.pageCount,
+                          Math.max(1, Number(e.target.value) || 1),
+                        ),
+                      );
+                      setPendingPin(null);
+                      setComment('');
+                      setCurrentStroke([]);
+                      strokeRef.current = [];
+                    }}
+                  />
+                  <span>of {actualPages ?? active.pageCount}</span>
+                  <span className="ml-3 text-xs text-white/45">
+                    Draw a mark, then write feedback to pin it to that location.
+                  </span>
+                </div>
+              </div>
+              <aside className="max-h-[calc(100vh-145px)] overflow-y-auto p-6">
+                <div className="mb-5 flex items-center gap-4 rounded-2xl border border-black/8 bg-white p-3">
+                  <div className="h-24 w-28 shrink-0 overflow-hidden rounded-lg bg-[#f2f2ec]">
+                    {activeCover ? (
+                      <ApprovedCoverImage
+                        key={activeCover.image}
+                        cover={activeCover}
+                        contain
+                      />
+                    ) : (
+                      <div className="flex h-full flex-col items-center justify-center gap-2 text-black/40">
+                        <BookOpen className="size-7" />
+                        <span className="text-[10px]">No cover linked</span>
+                      </div>
                     )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-[#607468]">
+                      Book cover
+                    </p>
+                    <p className="mt-1 break-words text-sm font-semibold">
+                      {active.title}
+                    </p>
+                    <p className="mt-1 text-xs text-black/45">
+                      {active.grade} · {active.version}
+                    </p>
+                  </div>
+                </div>
+                <p className="mb-3 text-sm text-black/55">
+                  Uploaded by {active.uploader || 'Not recorded'}
+                </p>
+                <Button
+                  variant="outline"
+                  className="mb-5"
+                  onClick={() => {
+                    setDraft(active);
+                    setEditing(true);
+                  }}
+                >
+                  <FileText /> Update PDF link
+                </Button>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[.14em] text-[#607468]">
+                      Review status
+                    </p>
+                    <p className="mt-1 text-xs text-black/40">
+                      Decision for the complete book
+                    </p>
+                  </div>
+                </div>
+                <section
+                  aria-label="Three-level quality control"
+                  className="mt-5 space-y-3"
+                >
+                  <h2 className="font-semibold">
+                    Quality control ·{' '}
+                    {
+                      getQc(active.qc).filter(
+                        (item) => item.status === 'approved',
+                      ).length
+                    }
+                    /3 passed
+                  </h2>
+                  <label
+                    htmlFor="qc-reviewer"
+                    className="block text-xs font-semibold"
+                  >
+                    Reviewer name
+                  </label>
+                  <Input
+                    id="qc-reviewer"
+                    value={reviewer}
+                    onChange={(event) => setReviewer(event.target.value)}
+                    placeholder="Your name"
+                  />
+                  <label
+                    htmlFor="qc-note"
+                    className="block text-xs font-semibold"
+                  >
+                    QC notes
                   </label>
                   <Textarea
-                    id="page-feedback"
-                    className="mt-2 min-h-24 bg-white"
-                    value={comment}
-                    onChange={(e) => setComment(e.target.value)}
-                    placeholder="Write feedback for this page…"
+                    id="qc-note"
+                    value={qcNote}
+                    onChange={(event) => setQcNote(event.target.value)}
+                    placeholder="Required when requesting changes"
                   />
-                  <Button type="submit" className="mt-3 w-full" disabled={!comment.trim()}>
-                    <Send />
-                    Post feedback
-                  </Button>
-                </form>
-              </div>
-            </aside>
-          </section>
+                  {QC_LEVELS.map((label, level) => {
+                    const review = getQc(active.qc)[level];
+                    const locked = getQc(active.qc)
+                      .slice(0, level)
+                      .some((item) => item.status !== 'approved');
+                    return (
+                      <div
+                        key={label}
+                        className={`rounded-2xl border p-4 ${review.status === 'approved' ? 'border-emerald-200 bg-emerald-50' : 'border-black/10 bg-white'}`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <h3 className="text-sm font-semibold">
+                            QC {level + 1} · {label}
+                          </h3>
+                          {review.status === 'approved' && (
+                            <Check className="size-4 text-emerald-700" />
+                          )}
+                        </div>
+                        <p className="mt-1 text-xs text-black/55">
+                          {locked
+                            ? 'Locked until the previous level passes'
+                            : review.status === 'approved'
+                              ? 'Passed'
+                              : review.status === 'changes-needed'
+                                ? 'Changes needed'
+                                : 'Awaiting review'}
+                        </p>
+                        {review.reviewer && (
+                          <p className="mt-2 text-xs text-black/55">
+                            {review.reviewer} ·{' '}
+                            {new Date(review.reviewedAt).toLocaleString()}
+                          </p>
+                        )}
+                        {review.note && (
+                          <p className="mt-2 break-words text-sm">
+                            {review.note}
+                          </p>
+                        )}
+                        {!locked && (
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {review.status !== 'approved' && (
+                              <Button
+                                size="sm"
+                                disabled={
+                                  qcSaving ||
+                                  !reviewer.trim() ||
+                                  unresolved(active) > 0
+                                }
+                                onClick={() => void decideQc(level, true)}
+                              >
+                                Pass QC {level + 1}
+                              </Button>
+                            )}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={
+                                qcSaving || !reviewer.trim() || !qcNote.trim()
+                              }
+                              onClick={() => void decideQc(level, false)}
+                            >
+                              {review.status === 'approved'
+                                ? 'Reopen level'
+                                : 'Request changes'}
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {unresolved(active) > 0 && (
+                    <p className="text-xs text-amber-700">
+                      Resolve {unresolved(active)} open feedback item(s) before
+                      passing QC.
+                    </p>
+                  )}
+                  <p className="text-xs text-black/45">
+                    Reopening a level resets later approvals. Replacing the PDF
+                    starts QC again.
+                  </p>
+                </section>
+                <div className="mt-5 grid grid-cols-2 gap-2">
+                  {statuses.map((status) => (
+                    <button
+                      key={status}
+                      onClick={() => void setStatus(status)}
+                      className={`min-h-14 rounded-2xl border px-3 text-left text-sm transition ${active.status === status ? 'border-[#1c2b22] bg-[#1c2b22] text-white shadow-lg' : 'border-black/8 bg-white hover:border-black/20'}`}
+                    >
+                      {status}
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-8 border-t border-black/8 pt-6">
+                  <div className="flex items-center justify-between">
+                    <h2 className="font-semibold">Page feedback</h2>
+                    <Badge>{activeComments.length}</Badge>
+                  </div>
+                  <p className="mt-1 text-xs text-black/40">
+                    Comments are saved against the selected page.
+                  </p>
+                  <div className="mt-4 space-y-3">
+                    {activeComments.map((item) => (
+                      <article
+                        key={item.id}
+                        id={`feedback-${item.id}`}
+                        style={
+                          focusedComment === item.id
+                            ? { outline: '2px solid #eab308' }
+                            : undefined
+                        }
+                        className={`rounded-2xl border p-4 ${item.done ? 'border-emerald-200 bg-emerald-50/70' : 'border-black/8 bg-white'}`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <button
+                            onClick={() => {
+                              setPage(item.page);
+                              setPendingPin(null);
+                              setComment('');
+                              setFocusedComment(item.id);
+                            }}
+                            className="rounded-full bg-[#edf1e8] px-2.5 py-1 text-xs font-semibold"
+                          >
+                            Page {item.page}
+                            {item.pin ? ' · Pinned' : ''}
+                          </button>
+                          <span className="text-[10px] text-black/35">
+                            {item.time}
+                          </span>
+                        </div>
+                        <p
+                          className={`mt-3 break-words text-sm leading-5 ${item.done ? 'text-black/40 line-through' : 'text-black/65'}`}
+                        >
+                          {item.text}
+                        </p>
+                        <Button
+                          onClick={() => void toggleDone(item.id)}
+                          size="sm"
+                          variant={item.done ? 'outline' : 'default'}
+                          className="mt-3"
+                        >
+                          <Check />
+                          {item.done ? 'Reopen' : 'Mark done'}
+                        </Button>
+                      </article>
+                    ))}
+                  </div>
+                  <form
+                    onSubmit={postComment}
+                    className="mt-5 rounded-2xl bg-[#eef3e9] p-4"
+                  >
+                    <label className="flex items-center justify-between text-xs font-semibold">
+                      <span>Comment for page {page}</span>
+                      {pendingPin && (
+                        <span className="flex items-center gap-1 text-amber-700">
+                          <MapPin className="size-3" />
+                          Pinned on page
+                        </span>
+                      )}
+                    </label>
+                    <Textarea
+                      id="page-feedback"
+                      className="mt-2 min-h-24 bg-white"
+                      value={comment}
+                      onChange={(e) => setComment(e.target.value)}
+                      placeholder="Write feedback for this page…"
+                    />
+                    <Button
+                      type="submit"
+                      className="mt-3 w-full"
+                      disabled={!comment.trim()}
+                    >
+                      <Send />
+                      Post feedback
+                    </Button>
+                  </form>
+                </div>
+              </aside>
+            </section>
           </div>
         ) : (
           <>
@@ -964,7 +1711,10 @@ export default function BookReviewClient() {
                           Approved
                         </Badge>
                         <p className="mt-3 flex items-center gap-1 text-sm font-semibold text-emerald-700">
-                          {bookForCover(cover) ? 'Open book review' : 'Add PDF link'} <ChevronRight className="size-4" />
+                          {bookForCover(cover)
+                            ? 'Open book review'
+                            : 'Add PDF link'}{' '}
+                          <ChevronRight className="size-4" />
                         </p>
                       </div>
                     </button>
@@ -999,75 +1749,90 @@ export default function BookReviewClient() {
                       {items.map((book) => {
                         const cover = coverForBook(book);
                         return (
-                        <article
-                          key={book.id}
-                          className="overflow-hidden rounded-2xl border border-black/8 bg-white shadow-sm"
-                        >
-                          <button
-                            onClick={() => openBook(book)}
-                            className="block w-full text-left"
+                          <article
+                            key={book.id}
+                            className="overflow-hidden rounded-2xl border border-black/8 bg-white shadow-sm"
                           >
-                            <div className="relative aspect-[16/8] overflow-hidden bg-[#f2f2ec]">
-                              {cover ? (
-                                <ApprovedCoverImage key={cover.image} cover={cover} contain />
-                              ) : (
-                                <div className="flex h-full flex-col items-center justify-center gap-3 text-black/40">
-                                  <BookOpen className="size-12" />
-                                  <span className="text-xs">No cover linked</span>
-                                </div>
-                              )}
-                              <span className="absolute bottom-3 right-3 rounded-full bg-black/65 px-3 py-1 text-xs text-white">
-                                {book.pageCount} {book.pageCount === 1 ? 'page' : 'pages'}
-                              </span>
-                            </div>
-                            <div className="p-5">
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs text-black/40">
-                                  {book.grade} · {book.version}
-                                </span>
-                                <Badge className={statusClass[book.status]}>
-                                  {book.status}
-                                </Badge>
-                              </div>
-                              <h3 className="mt-3 text-xl font-semibold">
-                                {book.title}
-                              </h3>
-                              <p className="mt-2 text-xs font-medium text-[#42604d]">QC · {getQc(book.qc).filter(item => item.status === 'approved').length}/3 passed</p>
-                              <div className="mt-5 flex items-center justify-between border-t border-black/7 pt-4 text-sm text-[#42604d]">
-                                <span>
-                                  {unresolved(book) > 0 && (
-                                    <span className="inline-flex items-center gap-1 rounded-full bg-red-500 px-2 py-1 text-xs font-semibold text-white">
-                                      <MessageCircle className="size-3" />
-                                      {unresolved(book)}
+                            <button
+                              onClick={() => openBook(book)}
+                              className="block w-full text-left"
+                            >
+                              <div className="relative aspect-[16/8] overflow-hidden bg-[#f2f2ec]">
+                                {cover ? (
+                                  <ApprovedCoverImage
+                                    key={cover.image}
+                                    cover={cover}
+                                    contain
+                                  />
+                                ) : (
+                                  <div className="flex h-full flex-col items-center justify-center gap-3 text-black/40">
+                                    <BookOpen className="size-12" />
+                                    <span className="text-xs">
+                                      No cover linked
                                     </span>
-                                  )}
-                                </span>
-                                <span>
-                                  Open book{' '}
-                                  <ChevronRight className="inline size-4" />
+                                  </div>
+                                )}
+                                <span className="absolute bottom-3 right-3 rounded-full bg-black/65 px-3 py-1 text-xs text-white">
+                                  {book.pageCount}{' '}
+                                  {book.pageCount === 1 ? 'page' : 'pages'}
                                 </span>
                               </div>
+                              <div className="p-5">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs text-black/40">
+                                    {book.grade} · {book.version}
+                                  </span>
+                                  <Badge className={statusClass[book.status]}>
+                                    {book.status}
+                                  </Badge>
+                                </div>
+                                <h3 className="mt-3 text-xl font-semibold">
+                                  {book.title}
+                                </h3>
+                                <p className="mt-2 text-xs font-medium text-[#42604d]">
+                                  QC ·{' '}
+                                  {
+                                    getQc(book.qc).filter(
+                                      (item) => item.status === 'approved',
+                                    ).length
+                                  }
+                                  /3 passed
+                                </p>
+                                <div className="mt-5 flex items-center justify-between border-t border-black/7 pt-4 text-sm text-[#42604d]">
+                                  <span>
+                                    {unresolved(book) > 0 && (
+                                      <span className="inline-flex items-center gap-1 rounded-full bg-red-500 px-2 py-1 text-xs font-semibold text-white">
+                                        <MessageCircle className="size-3" />
+                                        {unresolved(book)}
+                                      </span>
+                                    )}
+                                  </span>
+                                  <span>
+                                    Open book{' '}
+                                    <ChevronRight className="inline size-4" />
+                                  </span>
+                                </div>
+                              </div>
+                            </button>
+                            <div className="flex border-t border-black/7">
+                              <button
+                                onClick={() => {
+                                  setDraft(book);
+                                  setEditing(true);
+                                }}
+                                className="flex-1 px-4 py-3 text-xs font-semibold text-black/50 hover:bg-black/[.03]"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                onClick={() => void deleteBook(book)}
+                                className="border-l border-black/7 px-4 text-red-500 hover:bg-red-50"
+                                aria-label={`Delete ${book.title}`}
+                              >
+                                <Trash2 className="size-4" />
+                              </button>
                             </div>
-                          </button>
-                          <div className="flex border-t border-black/7">
-                            <button
-                              onClick={() => {
-                                setDraft(book);
-                                setEditing(true);
-                              }}
-                              className="flex-1 px-4 py-3 text-xs font-semibold text-black/50 hover:bg-black/[.03]"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              onClick={() => void deleteBook(book)}
-                              className="border-l border-black/7 px-4 text-red-500 hover:bg-red-50"
-                              aria-label={`Delete ${book.title}`}
-                            >
-                              <Trash2 className="size-4" />
-                            </button>
-                          </div>
-                        </article>
+                          </article>
                         );
                       })}
                     </div>

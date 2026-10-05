@@ -31,6 +31,9 @@ export async function ensureDatabaseTables() {
   await sql`CREATE TABLE IF NOT EXISTS bookdesk_comments (book_id TEXT NOT NULL, id BIGINT NOT NULL, page_number INTEGER NOT NULL DEFAULT 1, body TEXT NOT NULL, display_time TEXT NOT NULL, done BOOLEAN NOT NULL DEFAULT FALSE, pin_x DOUBLE PRECISION, pin_y DOUBLE PRECISION, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY (book_id, id))`;
   await sql`ALTER TABLE bookdesk_comments ADD COLUMN IF NOT EXISTS pin_x DOUBLE PRECISION`;
   await sql`ALTER TABLE bookdesk_comments ADD COLUMN IF NOT EXISTS pin_y DOUBLE PRECISION`;
+  await sql`CREATE TABLE IF NOT EXISTS bookdesk_executive_history (id BIGSERIAL PRIMARY KEY, book_id TEXT NOT NULL, action TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`;
+  await sql`CREATE TABLE IF NOT EXISTS coverdesk_notifications (id BIGSERIAL PRIMARY KEY, audience TEXT NOT NULL, event_type TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', book_id TEXT, is_read BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`;
+  await sql`CREATE TABLE IF NOT EXISTS coverdesk_ops_events (id BIGSERIAL PRIMARY KEY, area TEXT NOT NULL, level TEXT NOT NULL, event_type TEXT NOT NULL, message TEXT NOT NULL, duration_ms INTEGER, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`;
   await sql`ALTER TABLE coverdesk_covers ADD COLUMN IF NOT EXISTS cover_id TEXT`;
   await sql`UPDATE coverdesk_covers SET cover_id = 'legacy-' || position WHERE cover_id IS NULL`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS coverdesk_covers_cover_id_idx ON coverdesk_covers (cover_id)`;
