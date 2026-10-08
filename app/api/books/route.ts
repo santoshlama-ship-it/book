@@ -36,11 +36,11 @@ async function readState() {
       Record<string, unknown>
     >;
   const commentRows =
-    (await sql`SELECT book_id, id, page_number, body, display_time, done, pin_x, pin_y FROM bookdesk_comments ORDER BY created_at, id`) as unknown as Array<
+    (await sql`SELECT book_id, id, page_number, body, display_time, done, pin_x, pin_y, created_at FROM bookdesk_comments ORDER BY created_at, id`) as unknown as Array<
       Record<string, unknown>
     >;
   const coverRows =
-    (await sql`SELECT cover_id, grade, subject, version, image_url FROM coverdesk_covers WHERE status = 'Approved' ORDER BY position`) as unknown as Array<
+    (await sql`SELECT cover_id, grade, subject, version, image_url FROM coverdesk_covers WHERE status = 'Approved' AND archived = FALSE ORDER BY position`) as unknown as Array<
       Record<string, unknown>
     >;
   const books = rows.map((row) => ({
@@ -71,7 +71,9 @@ async function readState() {
         id: Number(row.id),
         page: Number(row.page_number) || 1,
         text: String(row.body),
-        time: String(row.display_time),
+        time: Number.isFinite(Date.parse(String(row.display_time)))
+          ? String(row.display_time)
+          : String(row.created_at),
         done: Boolean(row.done),
         ...pin,
       });

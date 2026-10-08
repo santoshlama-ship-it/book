@@ -13,6 +13,7 @@ export const runtime = 'nodejs';
 type Approval = { designer?: string; client: string; date: string };
 type Cover = {
   id?: string;
+  archived?: boolean;
   grade: string;
   subject: string;
   status: string;
@@ -85,8 +86,8 @@ async function replaceDesigns(designs: Cover[], recordHistory = true) {
   for (const [position, cover] of designs.entries()) {
     const coverId = cover.id || `legacy-${position}`;
     await sql`
-      INSERT INTO coverdesk_covers (position, cover_id, grade, subject, status, version, image_url, palette, concept, inspiration, details, approval_client, approval_date)
-      VALUES (${position}, ${coverId}, ${cover.grade}, ${cover.subject}, ${normaliseStatus(cover.status)}, ${cover.version}, ${cover.image || ''}, ${JSON.stringify(cover.palette || [])}::jsonb, ${cover.concept || ''}, ${cover.inspiration || ''}, ${JSON.stringify(cover.details || {})}::jsonb, ${cover.approval?.client || null}, ${cover.approval?.date || null})
+      INSERT INTO coverdesk_covers (position, cover_id, grade, subject, status, version, image_url, palette, concept, inspiration, details, approval_client, approval_date, archived)
+      VALUES (${position}, ${coverId}, ${cover.grade}, ${cover.subject}, ${normaliseStatus(cover.status)}, ${cover.version}, ${cover.image || ''}, ${JSON.stringify(cover.palette || [])}::jsonb, ${cover.concept || ''}, ${cover.inspiration || ''}, ${JSON.stringify(cover.details || {})}::jsonb, ${cover.approval?.client || null}, ${cover.approval?.date || null}, ${Boolean(cover.archived)})
     `;
   }
   for (const cover of designs) {
@@ -219,16 +220,17 @@ async function prepareDatabase() {
 async function readDatabaseState(): Promise<SyncedState> {
   const sql = getDatabase();
   const coverRows =
-    (await sql`SELECT position, cover_id, grade, subject, status, version, image_url, palette, concept, inspiration, details, approval_client, approval_date FROM coverdesk_covers ORDER BY position`) as unknown as Array<
+    (await sql`SELECT position, cover_id, grade, subject, status, version, image_url, palette, concept, inspiration, details, approval_client, approval_date, archived FROM coverdesk_covers ORDER BY position`) as unknown as Array<
       Record<string, unknown>
     >;
   const commentRows =
-    (await sql`SELECT cover_position, id, name, body, display_time, done, pin_x, pin_y FROM coverdesk_comments ORDER BY cover_position, created_at, id`) as unknown as Array<{
+    (await sql`SELECT cover_position, id, name, body, display_time, done, pin_x, pin_y, created_at FROM coverdesk_comments ORDER BY cover_position, created_at, id`) as unknown as Array<{
       cover_position: number;
       id: string | number;
       name: string;
       body: string;
       display_time: string;
+      created_at: string;
       done: boolean;
       pin_x: number | null;
       pin_y: number | null;
@@ -240,6 +242,7 @@ async function readDatabaseState(): Promise<SyncedState> {
     status: normaliseStatus(String(row.status || '')),
     version: String(row.version || ''),
     image: String(row.image_url || ''),
+    archived: Boolean(row.archived),
     palette: Array.isArray(row.palette) ? row.palette : [],
     concept: String(row.concept || ''),
     inspiration: String(row.inspiration || ''),
@@ -261,7 +264,9 @@ async function readDatabaseState(): Promise<SyncedState> {
         id: Number(row.id),
         name: row.name,
         text: row.body,
-        time: row.display_time,
+        time: Number.isFinite(Date.parse(row.display_time))
+          ? row.display_time
+          : String(row.created_at),
         done: row.done,
         ...(row.pin_x !== null && row.pin_y !== null
           ? { pin: { x: Number(row.pin_x), y: Number(row.pin_y) } }
@@ -289,6 +294,16 @@ export async function GET() {
         const sheetState = await readGoogleSheetState();
         if (sheetState) {
           const syncedState = applyCommentStatuses(sheetState);
+          const databaseState = await readDatabaseState();
+          const archivedIds = new Set(
+            databaseState.designs
+              .filter((cover) => cover.archived)
+              .map((cover) => cover.id),
+          );
+          syncedState.designs = syncedState.designs.map((cover) => ({
+            ...cover,
+            archived: archivedIds.has(cover.id),
+          }));
           await replaceDesigns(syncedState.designs, false);
           await replaceComments(syncedState.comments);
         }

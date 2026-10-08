@@ -35,6 +35,7 @@ export async function ensureDatabaseTables() {
   await sql`CREATE TABLE IF NOT EXISTS coverdesk_notifications (id BIGSERIAL PRIMARY KEY, audience TEXT NOT NULL, event_type TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', book_id TEXT, is_read BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`;
   await sql`CREATE TABLE IF NOT EXISTS coverdesk_ops_events (id BIGSERIAL PRIMARY KEY, area TEXT NOT NULL, level TEXT NOT NULL, event_type TEXT NOT NULL, message TEXT NOT NULL, duration_ms INTEGER, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`;
   await sql`ALTER TABLE coverdesk_covers ADD COLUMN IF NOT EXISTS cover_id TEXT`;
+  await sql`ALTER TABLE coverdesk_covers ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE`;
   await sql`UPDATE coverdesk_covers SET cover_id = 'legacy-' || position WHERE cover_id IS NULL`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS coverdesk_covers_cover_id_idx ON coverdesk_covers (cover_id)`;
   await sql`ALTER TABLE coverdesk_comments ADD COLUMN IF NOT EXISTS cover_id TEXT`;

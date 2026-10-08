@@ -8,6 +8,14 @@ const read = (path: string) =>
 test('book builder exposes approved covers only', async () => {
   const route = await read('app/api/books/route.ts');
   assert.match(route, /WHERE status = 'Approved'/);
+  assert.match(route, /archived = FALSE/);
+});
+
+test('cover archive preserves the cover and linked comments', async () => {
+  const dashboard = await read('app/dashboard-client.tsx');
+  assert.match(dashboard, /archived: nextArchived/);
+  assert.match(dashboard, /Its image, text and comments will be kept safely/);
+  assert.doesNotMatch(dashboard, /const deleteDesign/);
 });
 
 test('book API persists page comments, pins and annotation payloads', async () => {

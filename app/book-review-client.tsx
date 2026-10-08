@@ -45,6 +45,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import PdfPage from './pdf-page';
 import { parsePdfLink } from '@/lib/pdf-link';
+import { formatCommentTime } from '@/lib/comment-time';
 import {
   QC_LEVELS,
   emptyQc,
@@ -521,7 +522,7 @@ export default function BookReviewClient() {
       id: Date.now(),
       page,
       text: comment.trim(),
-      time: 'Just now',
+      time: new Date().toISOString(),
       done: false,
       ...(pendingPin ? { pin: pendingPin } : {}),
     };
@@ -1600,9 +1601,12 @@ export default function BookReviewClient() {
                             Page {item.page}
                             {item.pin ? ' · Pinned' : ''}
                           </button>
-                          <span className="text-[10px] text-black/35">
-                            {item.time}
-                          </span>
+                          <time
+                            dateTime={item.time}
+                            className="text-[10px] text-black/35"
+                          >
+                            {formatCommentTime(item.time)}
+                          </time>
                         </div>
                         <p
                           className={`mt-3 break-words text-sm leading-5 ${item.done ? 'text-black/40 line-through' : 'text-black/65'}`}
