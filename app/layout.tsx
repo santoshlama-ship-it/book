@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { Geist_Mono, Nunito } from 'next/font/google';
+import Script from 'next/script';
 import './globals.css';
 
 const nunito = Nunito({
@@ -14,7 +15,8 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: 'Coverdesk — Book Cover Production',
-  description: 'A production and approval workspace for grade-book cover designers.',
+  description:
+    'A production and approval workspace for grade-book cover designers.',
   icons: {
     icon: '/coverdesk-logo.png',
     apple: '/coverdesk-logo.png',
@@ -39,10 +41,13 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body
-        className={`${nunito.variable} ${geistMono.variable} antialiased`}
-      >
+      <body className={`${nunito.variable} ${geistMono.variable} antialiased`}>
         {children}
+        <Script
+          src="http://localhost:3088/tracker.js"
+          data-site="73ec7b4b8fb2a46dacd81369"
+          strategy="afterInteractive"
+        />
       </body>
     </html>
   );
