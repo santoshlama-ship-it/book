@@ -44,8 +44,8 @@ export default function RootLayout({
       <body className={`${nunito.variable} ${geistMono.variable} antialiased`}>
         {children}
         <Script
-          src="http://localhost:3088/tracker.js"
-          data-site="73ec7b4b8fb2a46dacd81369"
+          src="https://little-egg-analytics.vercel.app/tracker.js"
+          data-site="01b3421721bc3daf24a621fb"
           strategy="afterInteractive"
         />
       </body>
