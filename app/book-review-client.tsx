@@ -46,6 +46,7 @@ import { Badge } from '@/components/ui/badge';
 import PdfPage from './pdf-page';
 import { parsePdfLink } from '@/lib/pdf-link';
 import { formatCommentTime } from '@/lib/comment-time';
+import { BrandedLoader } from '@/components/branded-loader';
 import {
   QC_LEVELS,
   emptyQc,
@@ -1727,9 +1728,7 @@ export default function BookReviewClient() {
               </section>
             )}
             {loading ? (
-              <div className="rounded-3xl bg-white/70 p-12 text-center text-black/40">
-                Loading books…
-              </div>
+              <BrandedLoader label="Loading complete books…" />
             ) : books.length === 0 ? (
               <button
                 onClick={newBook}

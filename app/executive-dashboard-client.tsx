@@ -19,6 +19,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import PdfPage from './pdf-page';
+import { BrandedLoader } from '@/components/branded-loader';
 
 type Product = {
   id: string;
@@ -342,8 +343,8 @@ export default function ExecutiveDashboardClient() {
         </div>
 
         {loading ? (
-          <div className="mt-6 rounded-3xl bg-white p-16 text-center text-black/40">
-            Loading executive overview…
+          <div className="mt-6">
+            <BrandedLoader label="Loading executive overview…" />
           </div>
         ) : error ? (
           <div className="mt-6 rounded-3xl border border-red-200 bg-red-50 p-8 text-red-700">

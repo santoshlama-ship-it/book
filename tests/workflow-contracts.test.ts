@@ -45,3 +45,17 @@ test('critical dashboards include responsive breakpoints', async () => {
   assert.match(builder, /md:|lg:/);
   assert.match(executive, /md:|lg:/);
 });
+
+test('all workspaces use the branded loading indicator', async () => {
+  const [coverdesk, bookdesk, executive, access, loader] = await Promise.all([
+    read('app/dashboard-client.tsx'),
+    read('app/book-review-client.tsx'),
+    read('app/executive-dashboard-client.tsx'),
+    read('app/access-form.tsx'),
+    read('components/branded-loader.tsx'),
+  ]);
+  for (const source of [coverdesk, bookdesk, executive, access])
+    assert.match(source, /BrandedLoader/);
+  assert.match(loader, /animate-spin/);
+  assert.match(loader, /coverdesk-logo\.png/);
+});

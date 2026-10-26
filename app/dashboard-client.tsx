@@ -41,6 +41,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { formatCommentTime } from '@/lib/comment-time';
+import { BrandedLoader } from '@/components/branded-loader';
 
 type Cover = {
   id?: string;
@@ -199,6 +200,7 @@ function versionNumber(version: string) {
 export default function Home() {
   const [mode, setMode] = useState<'review' | 'designer'>('review');
   const [query, setQuery] = useState('');
+  const [loading, setLoading] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
   const [designs, setDesigns] = useState<Cover[]>(covers);
@@ -343,6 +345,8 @@ export default function Home() {
           }
         }
         if (localComments) setComments(JSON.parse(localComments));
+      } finally {
+        setLoading(false);
       }
     };
     void loadState();
@@ -675,6 +679,7 @@ export default function Home() {
   };
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_12%_0%,#f1ffac_0,transparent_25%),radial-gradient(circle_at_92%_18%,#fff2a8_0,transparent_24%),linear-gradient(145deg,#fbfaf5,#f2f1e9)] text-[#171914]">
+      {loading && <BrandedLoader fullscreen label="Loading cover library…" />}
       <header className="sticky top-0 z-30 border-b border-white/60 bg-white/55 shadow-[0_8px_30px_rgba(35,38,28,.05)] backdrop-blur-2xl">
         <div className="mx-auto flex h-20 max-w-[1500px] items-center justify-between px-5 md:px-9">
           <div className="flex items-center gap-3">
